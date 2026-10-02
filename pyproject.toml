@@ -16,7 +16,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest==8.3.5"]
+dev = ["pytest==9.0.3"]
 
 [project.scripts]
 traffic-cps = "traffic_cps.cli:main"
