@@ -1,0 +1,48 @@
+{
+  "content_sha256": "5bb9fce41fece47ae1a51f3bb9abe46d6c37d597e2f145dd331cc336bb78e795",
+  "incoming_lane_lengths_m": {
+    "N_J_0": 246.0,
+    "N_J_1": 246.0,
+    "W_J_0": 239.6,
+    "W_J_1": 239.6
+  },
+  "movements": [
+    [
+      "N_J_0",
+      "J_S_0"
+    ],
+    [
+      "N_J_1",
+      "J_S_1"
+    ],
+    [
+      "W_J_0",
+      "J_E_0"
+    ],
+    [
+      "W_J_1",
+      "J_E_1"
+    ]
+  ],
+  "netconvert_command": [
+    "netconvert",
+    "--node-files",
+    "nodes.nod.xml",
+    "--edge-files",
+    "edges.edg.xml",
+    "--connection-files",
+    "connections.con.xml",
+    "--no-turnarounds",
+    "true",
+    "--output-file",
+    "network.net.xml"
+  ],
+  "netconvert_version": "1.24.0",
+  "sha256": {
+    "connections.con.xml": "5d0bec232903aa199a945b97ace3abb0403de19aedc39591ee1c1748c20a2191",
+    "edges.edg.xml": "db27ba0575ac2ce2d9c0e829cd203b67ee4f4311dc9f7f4054a0e90e7b3dfc82",
+    "network.net.xml": "8bc25a0434de0e9fce3f290ae26ab08e08969f6b4af5083f5db7edc3bd5c31a7",
+    "nodes.nod.xml": "7bf4ee21b7d1e36bc07c3f3d666b19179393ff0f16b5840a9718123035bbda01"
+  },
+  "tls_id": "J0"
+}

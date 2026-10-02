@@ -1,0 +1,6 @@
+<connections>
+    <connection from="N_J" to="J_S" fromLane="0" toLane="0"/>
+    <connection from="N_J" to="J_S" fromLane="1" toLane="1"/>
+    <connection from="W_J" to="J_E" fromLane="0" toLane="0"/>
+    <connection from="W_J" to="J_E" fromLane="1" toLane="1"/>
+</connections>

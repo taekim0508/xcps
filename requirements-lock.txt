@@ -1,0 +1,9 @@
+# Resolved on the reference container: python:3.11.17-slim, linux/aarch64, Python 3.11.17
+eclipse-sumo==1.24.0
+iniconfig==2.3.0
+packaging==26.3
+pluggy==1.6.0
+pytest==8.3.5
+PyYAML==6.0.2
+sumolib==1.24.0
+traci==1.24.0

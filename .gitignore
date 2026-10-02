@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+build/
+dist/
+
+# Generated run outputs (never committed, per build contract)
+outputs/
+
+# OS
+.DS_Store

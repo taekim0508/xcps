@@ -1,0 +1,166 @@
+{
+  "generator_version": "demand_v1",
+  "horizon_s": 60,
+  "probabilities_ns_we": [
+    [
+      0.3,
+      0.3
+    ]
+  ],
+  "profile": "balanced",
+  "routes_sha256": "93680b5367524db2e2db8decdd8309d9661c3de1847e7d4bf6bc2fc2d1c5ae75",
+  "scheduled_vehicle_count": 25,
+  "scheduled_vehicles": [
+    {
+      "depart_lane": 0,
+      "depart_s": 1,
+      "route": "WE",
+      "vehicle_id": "veh0"
+    },
+    {
+      "depart_lane": 0,
+      "depart_s": 6,
+      "route": "NS",
+      "vehicle_id": "veh1"
+    },
+    {
+      "depart_lane": 1,
+      "depart_s": 7,
+      "route": "WE",
+      "vehicle_id": "veh2"
+    },
+    {
+      "depart_lane": 0,
+      "depart_s": 12,
+      "route": "WE",
+      "vehicle_id": "veh3"
+    },
+    {
+      "depart_lane": 1,
+      "depart_s": 16,
+      "route": "NS",
+      "vehicle_id": "veh4"
+    },
+    {
+      "depart_lane": 1,
+      "depart_s": 17,
+      "route": "WE",
+      "vehicle_id": "veh5"
+    },
+    {
+      "depart_lane": 0,
+      "depart_s": 20,
+      "route": "NS",
+      "vehicle_id": "veh6"
+    },
+    {
+      "depart_lane": 0,
+      "depart_s": 21,
+      "route": "WE",
+      "vehicle_id": "veh7"
+    },
+    {
+      "depart_lane": 1,
+      "depart_s": 23,
+      "route": "NS",
+      "vehicle_id": "veh8"
+    },
+    {
+      "depart_lane": 0,
+      "depart_s": 24,
+      "route": "NS",
+      "vehicle_id": "veh9"
+    },
+    {
+      "depart_lane": 1,
+      "depart_s": 26,
+      "route": "NS",
+      "vehicle_id": "veh10"
+    },
+    {
+      "depart_lane": 0,
+      "depart_s": 28,
+      "route": "NS",
+      "vehicle_id": "veh11"
+    },
+    {
+      "depart_lane": 1,
+      "depart_s": 34,
+      "route": "WE",
+      "vehicle_id": "veh12"
+    },
+    {
+      "depart_lane": 1,
+      "depart_s": 35,
+      "route": "NS",
+      "vehicle_id": "veh13"
+    },
+    {
+      "depart_lane": 0,
+      "depart_s": 35,
+      "route": "WE",
+      "vehicle_id": "veh14"
+    },
+    {
+      "depart_lane": 1,
+      "depart_s": 37,
+      "route": "WE",
+      "vehicle_id": "veh15"
+    },
+    {
+      "depart_lane": 0,
+      "depart_s": 42,
+      "route": "WE",
+      "vehicle_id": "veh16"
+    },
+    {
+      "depart_lane": 1,
+      "depart_s": 48,
+      "route": "WE",
+      "vehicle_id": "veh17"
+    },
+    {
+      "depart_lane": 0,
+      "depart_s": 51,
+      "route": "NS",
+      "vehicle_id": "veh18"
+    },
+    {
+      "depart_lane": 1,
+      "depart_s": 52,
+      "route": "NS",
+      "vehicle_id": "veh19"
+    },
+    {
+      "depart_lane": 0,
+      "depart_s": 52,
+      "route": "WE",
+      "vehicle_id": "veh20"
+    },
+    {
+      "depart_lane": 1,
+      "depart_s": 54,
+      "route": "WE",
+      "vehicle_id": "veh21"
+    },
+    {
+      "depart_lane": 0,
+      "depart_s": 55,
+      "route": "NS",
+      "vehicle_id": "veh22"
+    },
+    {
+      "depart_lane": 1,
+      "depart_s": 56,
+      "route": "NS",
+      "vehicle_id": "veh23"
+    },
+    {
+      "depart_lane": 0,
+      "depart_s": 58,
+      "route": "WE",
+      "vehicle_id": "veh24"
+    }
+  ],
+  "traffic_seed": 0
+}

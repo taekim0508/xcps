@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "traffic-cps"
+version = "0.1.0"
+description = "Explainable single-intersection traffic signal controller on SUMO via direct TraCI"
+readme = "README.md"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+    "eclipse-sumo==1.24.0",
+    "traci==1.24.0",
+    "sumolib==1.24.0",
+    "PyYAML==6.0.2",
+]
+
+[project.optional-dependencies]
+dev = ["pytest==8.3.5"]
+
+[project.scripts]
+traffic-cps = "traffic_cps.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "integration: requires a passing `traffic-cps doctor` and real SUMO",
+]

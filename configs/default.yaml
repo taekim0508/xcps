@@ -1,0 +1,54 @@
+schema_version: 1
+simulation:
+  horizon_s: 3600
+  step_s: 1
+  control_interval_s: 5
+  tls_id: J0
+  initial_green: NS
+  gui: false
+  sumo_version: "1.24.0"
+network:
+  directory: scenarios/single
+  lanes:
+    NS: [N_J_0, N_J_1]
+    WE: [W_J_0, W_J_1]
+signal:
+  yellow_s: 2
+  minimum_green_s: 5
+  green_service_limit_s: 60
+  all_red_s: 0
+  fixed_green_target_s: 30            # pre-tuning default; must be < green_service_limit_s
+  fixed_green_candidates_s: [15, 20, 25, 30, 35, 40, 45, 50, 55]
+sensor:
+  vehicle_length_m: 5.0
+  minimum_gap_m: 2.5
+  retries: 2
+learning:
+  alpha: 0.1
+  discount_factor: 0.95
+  discount_unit_s: 5
+  epsilon_initial: 1.0
+  epsilon_floor: 0.1
+  epsilon_decay: 0.9995
+  controller_seed: 0
+  queue_edges: [0.0, 0.4, 0.8, 1.2, 1.6, 2.0]
+  elapsed_edges_s: [0.0, 5.0, 32.5, 60.0]
+  tie_abs_tolerance: 0.000000001
+  evaluation_requires_both_actions_updated: true
+storage:
+  output_root: outputs
+  checkpoint_every_updates: 100
+  keep_previous: 1
+  flush_each_tick: true
+experiment:
+  training_episodes: 15
+  training_seed_start: 0
+  development_seeds: [100, 101, 102]
+  final_seeds: [200, 201, 202, 203, 204]
+  development_after_episodes: [5, 10, 15]
+robustness:
+  levels:
+    low:  {noise_bound_vehicles: 1, stale_probability: 0.05}
+    high: {noise_bound_vehicles: 3, stale_probability: 0.20}
+  noise_seed_offset: 10000
+  saturation_check_max_fraction: 0.25

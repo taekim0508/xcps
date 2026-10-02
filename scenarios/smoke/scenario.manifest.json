@@ -1,0 +1,223 @@
+{
+  "calibration": [],
+  "demand": {
+    "generator_version": "demand_v1",
+    "horizon_s": 60,
+    "probabilities_ns_we": [
+      [
+        0.3,
+        0.3
+      ]
+    ],
+    "profile": "balanced",
+    "routes_sha256": "93680b5367524db2e2db8decdd8309d9661c3de1847e7d4bf6bc2fc2d1c5ae75",
+    "scheduled_vehicle_count": 25,
+    "scheduled_vehicles": [
+      {
+        "depart_lane": 0,
+        "depart_s": 1,
+        "route": "WE",
+        "vehicle_id": "veh0"
+      },
+      {
+        "depart_lane": 0,
+        "depart_s": 6,
+        "route": "NS",
+        "vehicle_id": "veh1"
+      },
+      {
+        "depart_lane": 1,
+        "depart_s": 7,
+        "route": "WE",
+        "vehicle_id": "veh2"
+      },
+      {
+        "depart_lane": 0,
+        "depart_s": 12,
+        "route": "WE",
+        "vehicle_id": "veh3"
+      },
+      {
+        "depart_lane": 1,
+        "depart_s": 16,
+        "route": "NS",
+        "vehicle_id": "veh4"
+      },
+      {
+        "depart_lane": 1,
+        "depart_s": 17,
+        "route": "WE",
+        "vehicle_id": "veh5"
+      },
+      {
+        "depart_lane": 0,
+        "depart_s": 20,
+        "route": "NS",
+        "vehicle_id": "veh6"
+      },
+      {
+        "depart_lane": 0,
+        "depart_s": 21,
+        "route": "WE",
+        "vehicle_id": "veh7"
+      },
+      {
+        "depart_lane": 1,
+        "depart_s": 23,
+        "route": "NS",
+        "vehicle_id": "veh8"
+      },
+      {
+        "depart_lane": 0,
+        "depart_s": 24,
+        "route": "NS",
+        "vehicle_id": "veh9"
+      },
+      {
+        "depart_lane": 1,
+        "depart_s": 26,
+        "route": "NS",
+        "vehicle_id": "veh10"
+      },
+      {
+        "depart_lane": 0,
+        "depart_s": 28,
+        "route": "NS",
+        "vehicle_id": "veh11"
+      },
+      {
+        "depart_lane": 1,
+        "depart_s": 34,
+        "route": "WE",
+        "vehicle_id": "veh12"
+      },
+      {
+        "depart_lane": 1,
+        "depart_s": 35,
+        "route": "NS",
+        "vehicle_id": "veh13"
+      },
+      {
+        "depart_lane": 0,
+        "depart_s": 35,
+        "route": "WE",
+        "vehicle_id": "veh14"
+      },
+      {
+        "depart_lane": 1,
+        "depart_s": 37,
+        "route": "WE",
+        "vehicle_id": "veh15"
+      },
+      {
+        "depart_lane": 0,
+        "depart_s": 42,
+        "route": "WE",
+        "vehicle_id": "veh16"
+      },
+      {
+        "depart_lane": 1,
+        "depart_s": 48,
+        "route": "WE",
+        "vehicle_id": "veh17"
+      },
+      {
+        "depart_lane": 0,
+        "depart_s": 51,
+        "route": "NS",
+        "vehicle_id": "veh18"
+      },
+      {
+        "depart_lane": 1,
+        "depart_s": 52,
+        "route": "NS",
+        "vehicle_id": "veh19"
+      },
+      {
+        "depart_lane": 0,
+        "depart_s": 52,
+        "route": "WE",
+        "vehicle_id": "veh20"
+      },
+      {
+        "depart_lane": 1,
+        "depart_s": 54,
+        "route": "WE",
+        "vehicle_id": "veh21"
+      },
+      {
+        "depart_lane": 0,
+        "depart_s": 55,
+        "route": "NS",
+        "vehicle_id": "veh22"
+      },
+      {
+        "depart_lane": 1,
+        "depart_s": 56,
+        "route": "NS",
+        "vehicle_id": "veh23"
+      },
+      {
+        "depart_lane": 0,
+        "depart_s": 58,
+        "route": "WE",
+        "vehicle_id": "veh24"
+      }
+    ],
+    "traffic_seed": 0
+  },
+  "network": {
+    "content_sha256": "5bb9fce41fece47ae1a51f3bb9abe46d6c37d597e2f145dd331cc336bb78e795",
+    "incoming_lane_lengths_m": {
+      "N_J_0": 246.0,
+      "N_J_1": 246.0,
+      "W_J_0": 239.6,
+      "W_J_1": 239.6
+    },
+    "movements": [
+      [
+        "N_J_0",
+        "J_S_0"
+      ],
+      [
+        "N_J_1",
+        "J_S_1"
+      ],
+      [
+        "W_J_0",
+        "J_E_0"
+      ],
+      [
+        "W_J_1",
+        "J_E_1"
+      ]
+    ],
+    "netconvert_command": [
+      "netconvert",
+      "--node-files",
+      "nodes.nod.xml",
+      "--edge-files",
+      "edges.edg.xml",
+      "--connection-files",
+      "connections.con.xml",
+      "--no-turnarounds",
+      "true",
+      "--output-file",
+      "network.net.xml"
+    ],
+    "netconvert_version": "1.24.0",
+    "sha256": {
+      "connections.con.xml": "5d0bec232903aa199a945b97ace3abb0403de19aedc39591ee1c1748c20a2191",
+      "edges.edg.xml": "db27ba0575ac2ce2d9c0e829cd203b67ee4f4311dc9f7f4054a0e90e7b3dfc82",
+      "network.net.xml": "8bc25a0434de0e9fce3f290ae26ab08e08969f6b4af5083f5db7edc3bd5c31a7",
+      "nodes.nod.xml": "7bf4ee21b7d1e36bc07c3f3d666b19179393ff0f16b5840a9718123035bbda01"
+    },
+    "tls_id": "J0"
+  },
+  "schema_version": 1,
+  "sha256": {
+    "demand.manifest.json": "750ea3194f8fc5acc60934aa38a806553a733df16515a3549ea952066a161cc3",
+    "demand.rou.xml": "93680b5367524db2e2db8decdd8309d9661c3de1847e7d4bf6bc2fc2d1c5ae75",
+    "network.net.xml": "8bc25a0434de0e9fce3f290ae26ab08e08969f6b4af5083f5db7edc3bd5c31a7"
+  }
+}
