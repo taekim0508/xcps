@@ -140,7 +140,7 @@ def build_report(run_dir: Path | str) -> Path:
                 '<span><i class="swatch" style="background:var(--green)"></i>green</span>'
                 '<span><i class="swatch" style="background:var(--yellow)"></i>yellow</span>'
                 '<span><i class="swatch" style="background:var(--red)"></i>red</span>'
-                "<span>&#9679; switch request &middot; &#9675; keep green &middot; &#9650; operating rule "
+                "<span>&#9679; switch request (queue rule or fixed schedule) &middot; &#9675; keep green &middot; &#9650; operating rule "
                 "&middot; &#10005; safety</span></p>")
     body.append(_svg(trace, horizon))
 
@@ -160,14 +160,20 @@ def build_report(run_dir: Path | str) -> Path:
 
     problems = list(trace.problems)
     errors = [e for e in trace.events if e["type"] == "error" and not e["payload"].get("recovered")]
+    blocks = [e for e in trace.events if e["type"] == "error" and e["payload"].get("stage") == "unexpected_block"]
     body.append("<h2>Failures and unavailable evidence</h2>")
-    if not problems and not errors:
+    if not problems and not errors and not blocks:
         body.append("<p>None recorded.</p>")
     for p in problems:
         body.append(f'<p class="alert">Trace problem: {escape(p)}</p>')
     for e in errors:
         body.append(f'<p class="alert">Error at {e["sim_time_s"]}s ({escape(str(e["payload"].get("kind")))}): '
                     f'{escape(str(e["payload"].get("message")))}</p>')
+    for e in blocks:
+        p = e["payload"]
+        body.append(f'<p class="alert">Unexpected block at {e["sim_time_s"]}s: request '
+                    f'{escape(str(p["origin"]["id"]))} for {escape(name(p["target"]))} was blocked '
+                    f'({escape(str(p["block_reason"]))}) and discarded.</p>')
 
     html = ("<!doctype html>\n<html lang=\"en\"><head><meta charset=\"utf-8\">"
             "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"

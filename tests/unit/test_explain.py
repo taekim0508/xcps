@@ -84,3 +84,30 @@ def test_module7_malformed_line_marks_trace_incomplete(tmp_path):
     e = explain(b.dir, "dec-10")
     assert e.trace_complete is False
     assert any("incomplete" in lim for lim in e.limitations)
+
+
+def test_sectionJ_fixed_switch_explained_as_fixed_schedule(tmp_path):
+    from traffic_cps.controllers.fixed import FixedTimeController
+
+    b = RunBuilder(tmp_path)
+    o = b.obs(time=35, ns_score=0.9, we_score=0.1, ns_count=25, we_count=3, elapsed=33)
+    b.submit(b.decide(o, "dec-35", FixedTimeController(30)))
+    e = explain(b.close(), "dec-35")
+    assert ("The fixed-time schedule requested W/E green because N/S had been green for 33s, "
+            "reaching its 30s fixed green target.") in e.text
+    assert "Queue scores did not affect this choice." in e.text
+    assert "queue score was higher" not in e.text and "operating rule" not in e.text
+    assert e.facts["source"] == "fixed_schedule" and e.facts["reason"] == "fixed_target_reached"
+    assert e.facts["fixed_green_target_s"] == 30
+
+
+def test_sectionJ_fixed_retain_explained_as_fixed_schedule(tmp_path):
+    from traffic_cps.controllers.fixed import FixedTimeController
+
+    b = RunBuilder(tmp_path)
+    o = b.obs(time=20, ns_score=0.1, we_score=1.5, ns_count=2, we_count=45, elapsed=20)
+    b.submit(b.decide(o, "dec-20", FixedTimeController(30)))
+    e = explain(b.close(), "dec-20")
+    assert ("The fixed-time schedule kept N/S green because it had been green for 20s, "
+            "below its 30s fixed green target.") in e.text
+    assert "No signal change was needed" in e.text

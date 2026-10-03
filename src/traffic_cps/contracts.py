@@ -229,13 +229,14 @@ class SubmissionResult:
 
 
 # ----------------------------------------------------------------------
-# Decisions (chunk 2)
+# Decisions
 # ----------------------------------------------------------------------
 
 class DecisionSource(str, Enum):
     """What produced a controller decision. Operating rules and safety are never decisions."""
 
     QUEUE_RULE = "queue_rule"
+    FIXED_SCHEDULE = "fixed_schedule"
     TEST_SCRIPT = "test_script"  # scripted decisions used only by tests
 
 
@@ -243,6 +244,8 @@ class DecisionReason(str, Enum):
     HIGHER_QUEUE_SCORE = "higher_queue_score"
     EQUAL_QUEUE_SCORES = "equal_queue_scores"
     SERVICE_LIMIT_COMPETING_DEMAND = "service_limit_competing_demand"
+    FIXED_TARGET_REACHED = "fixed_target_reached"
+    FIXED_TARGET_NOT_REACHED = "fixed_target_not_reached"
     SCRIPTED = "scripted"
 
 
@@ -281,6 +284,7 @@ class Decision:
     green_service_limit_s: int
     epsilon: float | None
     policy_revision: int | None
+    fixed_green_target_s: int | None = None  # fixed-time decisions only
 
     def __post_init__(self) -> None:
         _frozen_mapping(self, "scores", "counts")

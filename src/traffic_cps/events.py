@@ -178,6 +178,7 @@ def decision_payload(d: Decision) -> dict:
         "green_service_limit_s": d.green_service_limit_s,
         "epsilon": d.epsilon,
         "policy_revision": d.policy_revision,
+        "fixed_green_target_s": d.fixed_green_target_s,
     }
 
 
@@ -192,6 +193,18 @@ def submission_payload(result: SubmissionResult, target_mask: str | None) -> dic
         "signal_event_id": result.signal_event.event_id if result.signal_event else None,
         "override_invariant": result.override.invariant if result.override else None,
         "violations": [v.invariant for v in result.violations],
+    }
+
+
+def unexpected_block_payload(result: SubmissionResult) -> dict:
+    """An `error` diagnostic: the timing gate allowed a request that the adapter still blocked."""
+    return {
+        "stage": "unexpected_block",
+        "recovered": True,
+        "origin": _origin(result.origin),
+        "target": result.target,
+        "block_reason": result.block_reason,
+        "message": "request allowed by the timing gate was blocked; discarded, not queued",
     }
 
 

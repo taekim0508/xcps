@@ -12,7 +12,9 @@ its own work. Per second t = 1..H:
 
 (Step 4, closing learning feedback at H, arrives with Q-learning in chunk 4.)
 Any failure stops the run cleanly: completed records are kept and the run is
-marked incomplete. Nothing continues after a safety violation.
+marked incomplete. Nothing continues after a safety violation. A request the
+timing gate allowed but the adapter still blocked is logged as an integration
+diagnostic and discarded, never queued for a later second.
 """
 
 from __future__ import annotations
@@ -23,7 +25,7 @@ import sys
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 from traffic_cps import SUMO_VERSION, __version__
 from traffic_cps import events as ev
@@ -80,6 +82,7 @@ class Runtime:
         mode: Mode = Mode.EVALUATE,
         notify: Callable[[str], None] | None = None,
         run_id: str | None = None,
+        connection_wrapper: Callable[[Any], Any] | None = None,
     ):
         self.config = config
         self.scenario_dir = Path(scenario_dir)
@@ -88,11 +91,12 @@ class Runtime:
         self.horizon_s = config.simulation.horizon_s if horizon_s is None else horizon_s
         self.mode = mode
         self.notify = notify
+        self.connection_wrapper = connection_wrapper  # fault injection in tests only
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         self.run_id = run_id or f"{controller.name}-{stamp}-{uuid.uuid4().hex[:6]}"
         self.counters = {k: 0 for k in (
             "ticks", "observations", "scheduled_checks", "constraint_holds", "eligible_choices", "decisions",
-            "accepted_requests", "switches_requested", "blocked_requests", "operating_actions",
+            "accepted_requests", "switches_requested", "blocked_requests", "unexpected_blocks", "operating_actions",
             "signal_changes", "safety_overrides", "safety_violations", "retrieval_retries",
         )}
         self.final_valid_time: int | None = None
@@ -117,7 +121,8 @@ class Runtime:
         cfg = self.config
         self.monitor = SafetyMonitor(cfg.signal.yellow_s, cfg.signal.minimum_green_s,
                                      cfg.signal.green_service_limit_s, cfg.simulation.initial_green)
-        self.adapter = SumoAdapter(cfg, self.monitor, sumo_log=self.run_dir / ev.SUMO_LOG)
+        self.adapter = SumoAdapter(cfg, self.monitor, connection_wrapper=self.connection_wrapper,
+                                   sumo_log=self.run_dir / ev.SUMO_LOG)
         self.actuator = TrafficActuator(self.adapter)
 
         completion, failure = CompletionStatus.INCOMPLETE, None
@@ -286,6 +291,9 @@ class Runtime:
             self.counters["safety_overrides"] += 1
         if result.status is SubmissionStatus.BLOCKED:
             self.counters["blocked_requests"] += 1
+            if log_submission:  # the runtime only submits when timing allows, so any block is unexpected
+                self.writer.append("error", t, ev.unexpected_block_payload(result))
+                self.counters["unexpected_blocks"] += 1
         self._log_violations(result.violations)
         if result.status in (SubmissionStatus.FAILED, SubmissionStatus.UNCONFIRMED):
             raise RunStop(f"signal command {result.status.value} at t={t}: {result.error}")

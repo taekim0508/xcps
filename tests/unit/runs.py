@@ -45,8 +45,8 @@ class RunBuilder:
         self.w.append("observation", o.time, ev.observation_payload(o), event_id=o.observation_id)
         return o
 
-    def decide(self, o, decision_id):
-        d = QueueController().select(context(o), decision_id)
+    def decide(self, o, decision_id, controller=None):
+        d = (controller or QueueController()).select(context(o), decision_id)
         self.w.append("decision", o.time, ev.decision_payload(d), event_id=d.decision_id)
         return d
 

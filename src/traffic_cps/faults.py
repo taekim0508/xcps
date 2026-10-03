@@ -1,4 +1,4 @@
-"""Fault injection for tests (this chunk) and evaluation-only sensor noise (chunk 7).
+"""Fault injection for tests and, later, evaluation-only sensor noise (chunk 7).
 
 `FaultyConnection` wraps a real TraCI connection: SUMO still runs for real and
 only the calls a test arms misbehave. Nothing here is used by normal runs.
@@ -7,7 +7,9 @@ only the calls a test arms misbehave. Nothing here is used by normal runs.
 from __future__ import annotations
 
 from collections import Counter
-from typing import Any
+from typing import Any, Callable
+
+from traffic_cps.contracts import SafetyOverride, SafetyVerdict
 
 _DOMAINS = ("simulation", "trafficlight", "lane", "vehicle")
 
@@ -22,7 +24,10 @@ class FaultyConnection:
         self._fail: Counter = Counter()
         self._returns: dict[tuple[str, str], list[Any]] = {}
         self._substitute_mask: str | None = None
+        self._fail_readback_after_write = False
         self._calls: Counter = Counter()
+        self._steps = 0
+        self._at_step: dict[int, list[Callable[[], None]]] = {}
 
     # Arming ---------------------------------------------------------------
 
@@ -38,6 +43,14 @@ class FaultyConnection:
         """The next signal write sends `mask` to SUMO instead of what the adapter asked for."""
         self._substitute_mask = mask
 
+    def fail_readback_after_next_write(self) -> None:
+        """The read-back that follows the next signal write raises (the command becomes unconfirmed)."""
+        self._fail_readback_after_write = True
+
+    def at_step(self, step: int, action: Callable[[], None]) -> None:
+        """Run `action` (usually an arming call) right after the `step`-th simulationStep returns."""
+        self._at_step.setdefault(step, []).append(action)
+
     def calls(self, domain: str, method: str) -> int:
         return self._calls[(domain, method)]
 
@@ -45,7 +58,17 @@ class FaultyConnection:
 
     def __getattr__(self, name: str) -> Any:
         attr = getattr(self.inner, name)
+        if name == "simulationStep":
+            return self._step
         return _DomainProxy(self, name, attr) if name in _DOMAINS else attr
+
+    def _step(self, *args: Any, **kwargs: Any) -> Any:
+        """simulationStep, armable as ("connection", "simulationStep")."""
+        value = self._invoke("connection", "simulationStep", self.inner.simulationStep, args, kwargs)
+        self._steps += 1
+        for action in self._at_step.pop(self._steps, []):
+            action()
+        return value
 
     def _invoke(self, domain: str, method: str, fn: Any, args: tuple, kwargs: dict) -> Any:
         key = (domain, method)
@@ -58,6 +81,9 @@ class FaultyConnection:
         if key == ("trafficlight", "setRedYellowGreenState") and self._substitute_mask is not None:
             args = (args[0], self._substitute_mask, *args[2:])
             self._substitute_mask = None
+        if key == ("trafficlight", "setRedYellowGreenState") and self._fail_readback_after_write:
+            self._fail_readback_after_write = False
+            self._fail[("trafficlight", "getRedYellowGreenState")] += 1
         return fn(*args, **kwargs)
 
 
@@ -79,3 +105,19 @@ class _DomainProxy:
 def disable_adapter_timing_guard(adapter: Any) -> None:
     """Simulate an adapter bug that skips its own minimum-green check (tests only)."""
     adapter._enforce_timing = False
+
+
+def veto_write_from(monitor: Any, origin_id: str, invariant: str = "S2") -> None:
+    """Make the monitor veto the next write from `origin_id` (simulates an unexpected block; tests only)."""
+    real = monitor.check_proposed
+    armed = {"on": True}
+
+    def check_proposed(mask: str, time: int, origin: Any) -> SafetyVerdict:
+        if armed["on"] and origin.origin_id == origin_id:
+            armed["on"] = False
+            reason = "injected veto for a test"
+            monitor.overrides.append(SafetyOverride(time, mask, monitor._mask, origin, invariant, reason))
+            return SafetyVerdict(False, invariant, reason)
+        return real(mask, time, origin)
+
+    monitor.check_proposed = check_proposed

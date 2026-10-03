@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 
 from traffic_cps import PYTHON_MAJOR_MINOR, SUMO_VERSION
-from traffic_cps.config import ConfigError, load_config
+from traffic_cps.config import Config, ConfigError, load_config
 from traffic_cps.contracts import CompletionStatus
 from traffic_cps.scenario import (
     DemandProfile,
@@ -161,12 +161,15 @@ def cmd_saturation_check(args: argparse.Namespace) -> int:
 # run / explain / report
 # --------------------------------------------------------------------------
 
-CONTROLLERS = ("queue",)
+CONTROLLERS = ("fixed", "queue")
 
 
-def _make_controller(name: str):
+def _make_controller(name: str, config: Config):
+    from traffic_cps.controllers.fixed import FixedTimeController
     from traffic_cps.controllers.queue import QueueController
 
+    if name == "fixed":  # pre-tuning target from the config; tuned values arrive in chunk 7
+        return FixedTimeController(config.signal.fixed_green_target_s)
     return {"queue": QueueController}[name]()
 
 
@@ -184,7 +187,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         print(f"warning: {message}", file=sys.stderr)
 
     try:
-        runtime = Runtime(config, args.scenario, _make_controller(args.controller), args.output,
+        runtime = Runtime(config, args.scenario, _make_controller(args.controller, config), args.output,
                           horizon_s=args.horizon, notify=notify)
         result = runtime.run()
     except Exception as exc:  # setup failures before the run loop (e.g. output exists)

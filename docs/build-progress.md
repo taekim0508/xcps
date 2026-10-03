@@ -2,7 +2,7 @@
 
 Tracks the 8 development chunks and the current position. Chunks follow the design doc's "Implementation order" (steps 0 to 7) exactly. The design doc remains the specification; this file only records status and decisions.
 
-**Current chunk:** 2 (awaiting review)
+**Current chunk:** 3 (awaiting review)
 
 Status values: `not started`, `in progress`, `awaiting review`, `done`.
 
@@ -12,8 +12,8 @@ Status values: `not started`, `in progress`, `awaiting review`, `done`.
 |---|---|---|---|
 | 0 | Foundation: scaffold, environment, scenario | done | `doctor` passes on 1.24.0; `scenario build` produces a validated network |
 | 1 | Simulator interface and safety | done | Real SUMO steps under the monitor with zero violations; fault-injection cases pass |
-| 2 | Thin vertical slice | awaiting review | `run` -> `explain` -> `report.html` on one short run; peak saturation check recorded |
-| 3 | Fixed-time and full runtime enforcement | not started | Full-horizon fixed and queue runs with correct attribution |
+| 2 | Thin vertical slice | done | `run` -> `explain` -> `report.html` on one short run; peak saturation check recorded |
+| 3 | Fixed-time and full runtime enforcement | awaiting review | Full-horizon fixed and queue runs with correct attribution |
 | 4 | Tabular Q-learning | not started | Short training learns; frozen evaluation leaves the table unchanged |
 | 5 | Persistence and failure-safe shutdown | not started | Train -> interrupt -> resume -> evaluate cycle works |
 | 6 | Full explanation layer | not started | Fidelity checks pass on all three controllers |
@@ -59,11 +59,17 @@ Status values: `not started`, `in progress`, `awaiting review`, `done`.
 
 ### 3. Fixed-time and full runtime enforcement
 - Files: `controllers/fixed.py`, `runtime.py` (full Section E ordering), `cli.py`
-- Tests: `fixed_schedule` attribution; target >= service limit rejected; service-limit operating action plus S4; 3,601 observations; no command at or after H; reward once per second
+- Tests: `fixed_schedule` attribution (zero forced switches in a normal full-hour fixed run); target >= service limit rejected; service-limit operating action plus S4; 3,601 observations and 720 scheduled checks; no command at or after H; failure paths (sensor, command, safety violation, simulator advance, event-log write) stop as incomplete with exit 1
+- Approved choices (2026-10-03): fixed-time switches when elapsed green >= target, regardless of competing demand; an unexpected block also logs an `error` event (stage `unexpected_block`, recovered); checkpoint and interrupt failures stay in chunk 5. "Reward once per second" moved to chunk 4, where the feedback interval and its consumer (the learner) are built together.
+
+- Result (2026-10-03): 183 unit + 62 integration tests pass in the container. Full-hour peak runs (seed 2, H=3600): fixed (target 30 s) 3,601 observations, 720 checks, 102 switches, all `fixed_schedule`, 0 operating actions, 0 violations; queue 3,601 observations, 720 checks, 313 switches, 0 operating actions, 0 violations. About 5 s wall time each.
+- Fixed-time realized greens: first 30 s, then 33 s. After the first switch every green starts 2 s after a check, so the first check at or past the target is 3 s late. Every candidate (max 55 s) therefore switches by 58 s, below the 60 s limit.
+- Finding: the queue rule never reaches the service limit at current demand. Probe runs (queue, H=3600, seeds 0 to 2 of balanced, asymmetric, and peak): 0 forced switches in all 9; longest green before a queue switch 43 s. The first full-hour queue test checked forced switches in a loop that ran zero times; it was replaced by a full-hour asymmetric run with a never-switching test controller (every switch forced, at least 10 required), so the check cannot pass empty.
+- Schema fix during testing: the unexpected-block diagnostic first serialized its origin as `origin_id`; it now uses the shared `{kind, id}` form via `events.unexpected_block_payload`.
 
 ### 4. Tabular Q-learning
 - Files: `learning.py`, `controllers/q_learning.py`, `runtime.py` (train/evaluate), `cli.py` (`train`, basic)
-- Tests: bin edges; hand-computed Q-update; counts only on completed updates; epsilon progress; coverage fallback; feedback discard at cutoff/failure; frozen evaluation never updates
+- Tests: reward added once per second to the pending interval (Section J); bin edges; hand-computed Q-update; counts only on completed updates; epsilon progress; coverage fallback; feedback discard at cutoff/failure; frozen evaluation never updates
 
 ### 5. Persistence and failure-safe shutdown
 - Files: `checkpoints.py`, `events.py` (all event types, manifests, `policy_start.json`), `runtime.py` (shutdown), `cli.py` (`--resume`, milestones, seed allocation)
@@ -101,3 +107,6 @@ Status values: `not started`, `in progress`, `awaiting review`, `done`.
 - 2026-10-02: Chunk 1 implemented; all tests pass; awaiting review.
 - 2026-10-02: Chunk 1 approved (committed by Tae). Chunk 2 plan approved; started.
 - 2026-10-03: Chunk 2 implemented; all tests pass; saturation check passed; awaiting review.
+- 2026-10-03: Chunk 2 approved (committed by Tae, 8d5d757). Baseline before chunk 3: 201 tests pass in the container. Chunk 3 planning started.
+- 2026-10-03: Chunk 3 plan approved; reward-per-second test moved to chunk 4; started.
+- 2026-10-03: Chunk 3 implemented; all tests pass; awaiting review.

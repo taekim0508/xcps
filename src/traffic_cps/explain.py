@@ -170,6 +170,14 @@ def _decision(trace: RunTrace, e: dict) -> tuple[str, dict, list]:
         parts.append(f"The queue rule requested {name(req)} green because {name(cur)} had been green for "
                      f"{p['elapsed_green_s']}s, reaching the {p['green_service_limit_s']}s service limit, while "
                      f"{counts[req]} vehicles were waiting on {name(req)}.")
+    elif p["reason"] == "fixed_target_reached":
+        parts.append(f"The fixed-time schedule requested {name(req)} green because {name(cur)} had been green "
+                     f"for {p['elapsed_green_s']}s, reaching its {p['fixed_green_target_s']}s fixed green target. "
+                     f"Queue scores did not affect this choice.")
+    elif p["reason"] == "fixed_target_not_reached":
+        parts.append(f"The fixed-time schedule kept {name(cur)} green because it had been green for "
+                     f"{p['elapsed_green_s']}s, below its {p['fixed_green_target_s']}s fixed green target. "
+                     f"Queue scores did not affect this choice.")
     else:
         raise ExplainError(f"unsupported decision reason {p['reason']!r}")
 
@@ -180,7 +188,7 @@ def _decision(trace: RunTrace, e: dict) -> tuple[str, dict, list]:
         "observation_id": p["observation_id"], "source": p["source"], "reason": p["reason"],
         "requested": req, "current_green": cur, "counts": counts, "scores": scores,
         "tie": p["tie"], "both_at_cap": p["both_at_cap"], "elapsed_green_s": p["elapsed_green_s"],
-        "execution": exec_facts,
+        "fixed_green_target_s": p.get("fixed_green_target_s"), "execution": exec_facts,
     }
     return " ".join(parts), facts, limitations
 
