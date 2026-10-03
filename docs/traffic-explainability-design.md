@@ -1019,3 +1019,13 @@ The implementation is ready only when someone can copy this document into an emp
 - End-to-end: short runs of every controller, short training/save/restart/evaluation cycle, immutable evaluation checkpoint, then the full configured experiment suite.
 
 This revision validates the specification and example syntax, not executable software. Actual installation, network generation, simulator behavior, numerical outcomes, storage durability, traffic improvement, and user-comprehension improvement must be checked during implementation. If an external dependency behaves differently, diagnose and version the compatibility change rather than silently rewriting the agreed semantics.
+
+### K. Recorded implementation resolutions
+
+Resolutions agreed during implementation. They clarify gaps in this document without changing its semantics.
+
+- **Network identity (2026-10-02).** `netconvert` writes a generation timestamp into the comment header of `network.net.xml`, so the raw file hash changes on every rebuild. The network manifest records both the raw `sha256` (byte identity of a copy) and `content_sha256` (hash with the leading comment header removed). `content_sha256` is the network hash used by the Section F compatibility contract.
+- **Configuration edges (2026-10-02).** "Consistent with the two-lane state encoding" means: `queue_edges` strictly increasing from 0.0 to 2.0; `elapsed_edges_s` strictly increasing, starting at 0, with the second edge equal to `minimum_green_s` and the last equal to `green_service_limit_s`. Additional validation: `keep_previous` must be 1, `flush_each_tick` must be true, development and final seed lists must not overlap, and duplicate YAML keys are rejected.
+- **Runtime platform (2026-10-02).** The macOS 1.24.0 wheel requires Homebrew library versions that are no longer published, so the toolchain runs in a Linux container (`python:3.11.17-slim`, linux/aarch64 on Apple Silicon) with SUMO 1.24.0 unchanged. Durability claims follow the Linux behavior.
+- **S4 deadline (2026-10-02).** If the monitor first observes at second t that the green-service limit is reached with measured competing demand, the outgoing yellow must be observed no later than second t+1; a green still observed at t+1 is a violation.
+- **Scheduled checks (2026-10-02).** No change: control points are 0, 5, ..., H-5 (720 for H=3600). The boundary at H closes or discards pending feedback per Section E step 4 but is not a scheduled check.

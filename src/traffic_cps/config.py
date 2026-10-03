@@ -63,6 +63,9 @@ class NetworkConfig:
     directory: Path
     lanes: dict[str, tuple[str, ...]]
 
+    def lanes_by_direction(self) -> dict[Direction, tuple[str, ...]]:
+        return {Direction(d): lanes for d, lanes in self.lanes.items()}
+
 
 @dataclass(frozen=True)
 class SignalConfig:

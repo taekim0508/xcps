@@ -2,7 +2,7 @@
 
 Tracks the 8 development chunks and the current position. Chunks follow the design doc's "Implementation order" (steps 0 to 7) exactly. The design doc remains the specification; this file only records status and decisions.
 
-**Current chunk:** 0 (awaiting review)
+**Current chunk:** 1 (awaiting review)
 
 Status values: `not started`, `in progress`, `awaiting review`, `done`.
 
@@ -10,8 +10,8 @@ Status values: `not started`, `in progress`, `awaiting review`, `done`.
 
 | # | Chunk | Status | Gate |
 |---|---|---|---|
-| 0 | Foundation: scaffold, environment, scenario | awaiting review | `doctor` passes on 1.24.0; `scenario build` produces a validated network |
-| 1 | Simulator interface and safety | not started | Real SUMO steps under the monitor with zero violations; fault-injection cases pass |
+| 0 | Foundation: scaffold, environment, scenario | done | `doctor` passes on 1.24.0; `scenario build` produces a validated network |
+| 1 | Simulator interface and safety | awaiting review | Real SUMO steps under the monitor with zero violations; fault-injection cases pass |
 | 2 | Thin vertical slice | not started | `run` -> `explain` -> `report.html` on one short run; peak saturation check recorded |
 | 3 | Fixed-time and full runtime enforcement | not started | Full-horizon fixed and queue runs with correct attribution |
 | 4 | Tabular Q-learning | not started | Short training learns; frozen evaluation leaves the table unchanged |
@@ -39,7 +39,12 @@ Status values: `not started`, `in progress`, `awaiting review`, `done`.
 
 ### 1. Simulator interface and safety
 - Files: `adapter.py`, `sensor.py`, `safety.py`, `faults.py` (test injection only)
-- Tests: masks derived from `getControlledLinks`; exact one-second advance; startup exception; vetoes for direct opposing green, premature yellow, late forced switch; same-time read retries (3 attempts max) then explicit failure; queue score and capacity arithmetic
+- Approved choices (2026-10-02): sensor owns the same-second retry loop; faults are injected by wrapping the real TraCI connection; S4 deadline is t+1 (design doc Section K). Visual mode (`sumo-gui`) skipped for now.
+- Tests: capacity `L / 7.5` and lane/direction scores; masks derived from `getControlledLinks`; exact one-second advance; startup exception; vetoes for direct opposing green, premature yellow, late forced switch; same-time read retries (3 attempts max) then explicit failure; queue score and capacity arithmetic
+
+- Result (2026-10-02): 124 unit + 29 integration tests pass in the container. Full-hour peak run (seed 2, switch every 30 s) under the monitor: 3,601 observations, 102 switches, 0 violations, 0 overrides, 0 S4 misses, 3.4 s wall time.
+- Test correction: the yellow-capture test first expected the t=10 primary observation to show yellow. Per Section E the observation (step 3) precedes the request (step 6), so the yellow is captured by the t=10 signal event and the color-onset time; the test now checks that.
+- Not in chunk 1: actuator, controllers, event log file, runtime loop (chunk 2). Records are in memory only.
 
 ### 2. Thin vertical slice
 - Files: `controllers/__init__.py`, `controllers/queue.py`, `actuator.py`, `runtime.py` (minimal), `events.py` (minimal), `explain.py` (minimal), `report.py` (timeline), `cli.py` (`run`, `explain`, `report`)
@@ -75,10 +80,7 @@ Status values: `not started`, `in progress`, `awaiting review`, `done`.
 
 ## Open questions
 
-- Chunk 0 (needs Tae's approval, then record in design doc): netconvert stamps a timestamp into `network.net.xml`, so its raw hash changes on every rebuild. Proposal: the network manifest keeps the raw `sha256` (proves a copy is byte-identical) and adds `content_sha256` (header comment stripped) as the network identity for the Section F compatibility contract.
-- Chunk 0 (needs Tae's approval): config interpretations of "edges inconsistent with the two-lane state encoding": queue edges must start at 0 and end at 2.0; elapsed edges must start at 0, have their second edge equal to `minimum_green_s`, and end at `green_service_limit_s`. Stricter-than-spec additions: `keep_previous` must be 1, `flush_each_tick` must be true, development and final seeds must not overlap, duplicate YAML keys are rejected.
-
-- Chunk 3: Section J says "720 scheduled checks including skipped time zero" (t = 0..3595), but Section E step 4 treats t = H = 3600 as a boundary where feedback may close. Confirm whether H is a 721st command-free boundary, then record the answer in the design doc.
+- None open. Resolved items are recorded in the design doc, Section K.
 
 ## Environment notes
 
@@ -89,3 +91,5 @@ Status values: `not started`, `in progress`, `awaiting review`, `done`.
 
 - 2026-10-01: Chunk plan agreed. Native macOS chosen.
 - 2026-10-02: Repo created and initial docs pushed. Native macOS failed (library versions); switched to Linux container. Chunk 0 implemented and tests passing; awaiting review.
+- 2026-10-02: Chunk 0 approved (network content hash, config rules). Chunk 1 plan approved; started.
+- 2026-10-02: Chunk 1 implemented; all tests pass; awaiting review.
