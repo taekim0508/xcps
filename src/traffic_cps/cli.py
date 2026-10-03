@@ -208,6 +208,49 @@ def cmd_run(args: argparse.Namespace) -> int:
     return EXIT_OK if ok else EXIT_FAILURE
 
 
+def cmd_train(args: argparse.Namespace) -> int:
+    from traffic_cps.report import build_report
+    from traffic_cps.runtime import train
+
+    try:
+        config = load_config(args.config)
+    except ConfigError as exc:
+        print(f"config: FAIL {exc}", file=sys.stderr)
+        return EXIT_INVALID
+    episodes = config.experiment.training_episodes if args.episodes is None else args.episodes
+    reports_ok = True
+
+    def notify(message: str) -> None:
+        print(f"warning: {message}", file=sys.stderr)
+
+    def on_episode(n: int, result) -> None:
+        nonlocal reports_ok
+        learning = result.counters
+        print(f"episode {n}/{episodes} {result.run_id}: {result.completion.value}; "
+              f"updates {learning['learning_updates']}, discarded {learning['feedback_discarded']}, "
+              f"accepted choices {learning['accepted_requests']}; log persisted: {result.persistence_ok}")
+        if result.failure:
+            print(f"failure: {result.failure}", file=sys.stderr)
+        try:
+            build_report(result.run_dir)
+        except Exception as exc:
+            reports_ok = False
+            print(f"report: FAIL {type(exc).__name__}: {exc}", file=sys.stderr)
+
+    try:
+        learner, results = train(config, episodes, args.output, horizon_s=args.horizon, notify=notify,
+                                 on_episode=on_episode)
+    except Exception as exc:  # setup failures before an episode starts (output exists, bad seeds, ...)
+        print(f"train: FAIL {type(exc).__name__}: {exc}", file=sys.stderr)
+        return EXIT_INVALID
+    completed = sum(r.completion is CompletionStatus.COMPLETED and r.persistence_ok for r in results)
+    print(f"training: {completed}/{episodes} episodes completed; policy revision {learner.table.revision}; "
+          f"{len(learner.table)} states; epsilon {learner.schedule.epsilon:.4f} after "
+          f"{learner.schedule.accepted_choices} accepted choices")
+    print("note: no table file is written yet; the event logs reconstruct the table (checkpoints: chunk 5)")
+    return EXIT_OK if completed == episodes and reports_ok else EXIT_FAILURE
+
+
 def cmd_explain(args: argparse.Namespace) -> int:
     from traffic_cps.explain import ExplainError, explain, render_text
 
@@ -276,6 +319,13 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--horizon", type=int, help="override the configured horizon (must match the scenario)")
     run.add_argument("--output", type=Path, required=True)
     run.set_defaults(func=cmd_run)
+
+    tr = sub.add_parser("train", help="train the tabular Q-learning controller")
+    tr.add_argument("--config", type=Path, required=True)
+    tr.add_argument("--episodes", type=int, help="number of episodes (default: experiment.training_episodes)")
+    tr.add_argument("--horizon", type=int, help="override the configured horizon (short smoke training)")
+    tr.add_argument("--output", type=Path, required=True)
+    tr.set_defaults(func=cmd_train)
 
     exp = sub.add_parser("explain", help="explain one recorded decision or event")
     exp.add_argument("--run", type=Path, required=True)

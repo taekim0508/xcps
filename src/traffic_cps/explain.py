@@ -147,50 +147,114 @@ def _execution(trace: RunTrace, origin_id: str, requested: str, current: str | N
 # Per-type explanations
 # ----------------------------------------------------------------------
 
+def _queue_reason(p: dict, verb: str) -> str:
+    """The queue rule's recorded branch (also used when Q-learning falls back to it)."""
+    req, cur, scores, counts = p["requested"], p["current_green"], p["scores"], p["counts"]
+    if p["reason"] == "higher_queue_score":
+        mine, theirs = pair(scores[req], scores[OTHER[req]])
+        return f"The queue rule {verb} because its queue score was higher: {mine} versus {theirs}."
+    if p["reason"] == "equal_queue_scores":
+        if p["both_at_cap"]:
+            return (f"N/S and W/E are both at estimated lane capacity; queue scores cannot distinguish "
+                    f"them, so the tie rule kept {name(cur)} green.")
+        value = pair(scores[cur], scores[OTHER[cur]])[0]
+        return f"The queue scores were equal ({value}), so the tie rule kept {name(cur)} green."
+    if p["reason"] == "service_limit_competing_demand":
+        return (f"The queue rule requested {name(req)} green because {name(cur)} had been green for "
+                f"{p['elapsed_green_s']}s, reaching the {p['green_service_limit_s']}s service limit, while "
+                f"{counts[req]} vehicles were waiting on {name(req)}.")
+    raise ExplainError(f"unsupported queue-rule reason {p['reason']!r}")
+
+
+def _cost(p: dict, d: str) -> str:
+    """-Q as estimated discounted future congestion cost; zero-update entries are untrained, not zero cost."""
+    if p["q_update_counts"][d] == 0:
+        return f"{name(d)} untrained (0 updates)"
+    n = p["q_update_counts"][d]
+    return f"{name(d)} {-p['q_values'][d]:.2f} ({n} update{'s' if n != 1 else ''})"
+
+
+def _q_choice(p: dict, verb: str) -> str:
+    req, cur = p["requested"], p["current_green"]
+    costs = f"{_cost(p, 'NS')}, {_cost(p, 'WE')}"
+    lead = (f"Learned state: N/S queue bin {p['q_state'][0]}, W/E queue bin {p['q_state'][1]}, elapsed-green bin "
+            f"{p['q_state'][3]}; policy revision {p['policy_revision']}. Estimated future congestion cost "
+            f"(lower preferred): {costs}.")
+    if p["reason"] == "exploration":
+        return (f"{lead} During training the controller explored: its random draw {p['exploration_draw']:.3f} was "
+                f"below the exploration rate {p['epsilon']:.3f}, so it {verb} at random. Learned values did not "
+                f"determine this choice.")
+    if p["reason"] == "higher_q_value":
+        return f"{lead} The learned policy {verb} because that choice had the lower estimated cost."
+    if p["reason"] == "equal_q_values":
+        return f"{lead} The estimates were equal, so the tie rule kept {name(cur)} green."
+    raise ExplainError(f"unsupported Q-learning reason {p['reason']!r}")
+
+
 def _decision(trace: RunTrace, e: dict) -> tuple[str, dict, list]:
     p, t = e["payload"], e["sim_time_s"]
     req, cur = p["requested"], p["current_green"]
     scores, counts = p["scores"], p["counts"]
     parts = [_situation(t, counts, scores)]
     verb = f"kept {name(cur)} green" if req == cur else f"requested {name(req)} green"
+    source = p["source"]
 
-    if p["source"] == "test_script":
+    if source == "test_script":
         parts.append(f"A test script {verb}.")
-    elif p["reason"] == "higher_queue_score":
-        mine, theirs = pair(scores[req], scores[OTHER[req]])
-        parts.append(f"The queue rule {verb} because its queue score was higher: {mine} versus {theirs}.")
-    elif p["reason"] == "equal_queue_scores":
-        if p["both_at_cap"]:
-            parts.append(f"N/S and W/E are both at estimated lane capacity; queue scores cannot distinguish "
-                         f"them, so the tie rule kept {name(cur)} green.")
-        else:
-            value = pair(scores[cur], scores[OTHER[cur]])[0]
-            parts.append(f"The queue scores were equal ({value}), so the tie rule kept {name(cur)} green.")
-    elif p["reason"] == "service_limit_competing_demand":
-        parts.append(f"The queue rule requested {name(req)} green because {name(cur)} had been green for "
-                     f"{p['elapsed_green_s']}s, reaching the {p['green_service_limit_s']}s service limit, while "
-                     f"{counts[req]} vehicles were waiting on {name(req)}.")
-    elif p["reason"] == "fixed_target_reached":
+    elif source == "queue_rule":
+        parts.append(_queue_reason(p, verb))
+    elif source == "fixed_schedule" and p["reason"] == "fixed_target_reached":
         parts.append(f"The fixed-time schedule requested {name(req)} green because {name(cur)} had been green "
                      f"for {p['elapsed_green_s']}s, reaching its {p['fixed_green_target_s']}s fixed green target. "
                      f"Queue scores did not affect this choice.")
-    elif p["reason"] == "fixed_target_not_reached":
+    elif source == "fixed_schedule" and p["reason"] == "fixed_target_not_reached":
         parts.append(f"The fixed-time schedule kept {name(cur)} green because it had been green for "
                      f"{p['elapsed_green_s']}s, below its {p['fixed_green_target_s']}s fixed green target. "
                      f"Queue scores did not affect this choice.")
+    elif source in ("q_greedy", "q_exploration"):
+        parts.append(_q_choice(p, verb))
+    elif source == "queue_fallback":
+        why = ("this learned state was never seen in training" if p["fallback_reason"] == "unseen_state"
+               else "not every permitted action had a completed training update in this state")
+        parts.append(f"The frozen learned policy did not decide: {why} ({p['fallback_reason']}), so the "
+                     f"queue rule was used instead.")
+        parts.append(_queue_reason(p, verb))
     else:
-        raise ExplainError(f"unsupported decision reason {p['reason']!r}")
+        raise ExplainError(f"unsupported decision source/reason {source!r}/{p['reason']!r}")
 
     exec_text, exec_facts, limitations = _execution(trace, e["event_id"], req, cur)
     if exec_text:
         parts.append(exec_text)
     facts = {
-        "observation_id": p["observation_id"], "source": p["source"], "reason": p["reason"],
+        "observation_id": p["observation_id"], "source": source, "reason": p["reason"],
         "requested": req, "current_green": cur, "counts": counts, "scores": scores,
         "tie": p["tie"], "both_at_cap": p["both_at_cap"], "elapsed_green_s": p["elapsed_green_s"],
-        "fixed_green_target_s": p.get("fixed_green_target_s"), "execution": exec_facts,
+        "fixed_green_target_s": p.get("fixed_green_target_s"),
+        "q_state": p.get("q_state"), "q_values": p.get("q_values"), "q_update_counts": p.get("q_update_counts"),
+        "policy_revision": p.get("policy_revision"), "epsilon": p.get("epsilon"),
+        "fallback_reason": p.get("fallback_reason"), "execution": exec_facts,
     }
+    if source in ("q_greedy", "q_exploration", "queue_fallback"):
+        limitations = [*limitations, "Values are learned estimates, not guaranteed costs or confidence measures; "
+                                     "later learning is reported separately."]
     return " ".join(parts), facts, limitations
+
+
+def _learning_update(trace: RunTrace, e: dict) -> tuple[str, dict, list]:
+    p, t = e["payload"], e["sim_time_s"]
+    text = (f"At {t}s, the training choice {p['decision_id']} ({name(p['action'])} from state {p['state']}, made at "
+            f"{p['start_time_s']}s) was updated after {p['duration_s']}s of feedback: raw reward sum "
+            f"{p['raw_reward_sum']:.3f}, discounted {p['discounted_reward']:.3f}, target {p['target']:.3f}. "
+            f"Its value changed from {p['old_q']:.3f} to {p['new_q']:.3f} (update {p['update_count_after']} for "
+            f"this entry; policy revision {p['policy_revision']}).")
+    return text, dict(p), []
+
+
+def _feedback_discarded(trace: RunTrace, e: dict) -> tuple[str, dict, list]:
+    p, t = e["payload"], e["sim_time_s"]
+    text = (f"At {t}s, the unfinished feedback for {p['decision_id']} (started {p['start_time_s']}s, "
+            f"{len(p['rewards'])} samples) was discarded ({p['reason']}); no learning update was made from it.")
+    return text, dict(p), []
 
 
 def _operating_action(trace: RunTrace, e: dict) -> tuple[str, dict, list]:
@@ -232,6 +296,8 @@ _HANDLERS = {
     "constraint_hold": _constraint_hold,
     "safety_override": _safety,
     "safety_violation": _safety,
+    "learning_update": _learning_update,
+    "feedback_discarded": _feedback_discarded,
 }
 
 

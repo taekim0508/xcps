@@ -18,7 +18,10 @@ from typing import Any, Mapping
 from traffic_cps.contracts import (
     Decision,
     HoldReason,
+    LearningUpdate,
     Observation,
+    PendingFeedback,
+    QState,
     SafetyOverride,
     SafetyViolation,
     SignalEvent,
@@ -179,6 +182,57 @@ def decision_payload(d: Decision) -> dict:
         "epsilon": d.epsilon,
         "policy_revision": d.policy_revision,
         "fixed_green_target_s": d.fixed_green_target_s,
+        "q_state": _state(d.q_state),
+        "q_values": d.q_values,
+        "q_update_counts": d.q_update_counts,
+        "exploration_draw": d.exploration_draw,
+        "fallback_reason": d.fallback_reason,
+    }
+
+
+def _state(state: QState | None) -> list | None:
+    return state.key() if state is not None else None
+
+
+def learning_update_payload(u: LearningUpdate) -> dict:
+    return {
+        "decision_id": u.decision_id,
+        "start_time_s": u.start_time,
+        "end_time_s": u.end_time,
+        "duration_s": u.duration_s,
+        "sample_ids": u.sample_ids,
+        "rewards": u.rewards,
+        "state": _state(u.state),
+        "action": u.action,
+        "next_state": _state(u.next_state),
+        "raw_reward_sum": u.raw_reward_sum,
+        "discounted_reward": u.discounted_reward,
+        "discount_per_second": u.discount_per_second,
+        "discount_time_unit": "per simulated second (gamma_5 ** (1/5))",
+        "bootstrap_multiplier": u.bootstrap_multiplier,
+        "bootstrap_values": u.bootstrap_values,
+        "bootstrap_allowed": u.bootstrap_allowed,
+        "bootstrap_max": u.bootstrap_max,
+        "alpha": u.alpha,
+        "target": u.target,
+        "old_q": u.old_q,
+        "new_q": u.new_q,
+        "update_count_before": u.update_count_before,
+        "update_count_after": u.update_count_after,
+        "policy_revision": u.policy_revision,
+    }
+
+
+def feedback_discarded_payload(w: PendingFeedback, reason: str, t: int) -> dict:
+    return {
+        "decision_id": w.decision_id,
+        "reason": reason,
+        "start_time_s": w.start_time,
+        "discarded_at_s": t,
+        "state": _state(w.state),
+        "action": w.action,
+        "sample_ids": w.sample_ids,
+        "rewards": w.rewards,
     }
 
 

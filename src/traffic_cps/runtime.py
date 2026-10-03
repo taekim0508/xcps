@@ -5,12 +5,21 @@ its own work. Per second t = 1..H:
 
   1. advance one second; read raw state (same-second retries); monitor S1-S3; confirm
   2. (t < H) complete a yellow that has lasted yellow_s
-  3. build and log the primary observation for t
+  3. build and log the primary observation for t; add its reward once to pending feedback
+  4. (t = H) close pending feedback if a fresh choice would be allowed, else discard it
   5. (t < H) enforce the green-service limit as an operating action; check S4
-  6. (t < H, t % interval == 0) timing hold, or controller decision -> actuator
+  6. (t < H, t % interval == 0) timing hold, or: close pending feedback, then controller
+     decision -> actuator; an accepted training choice opens new feedback
   7. flush the tick
 
-(Step 4, closing learning feedback at H, arrives with Q-learning in chunk 4.)
+Learning happens only in training mode. Feedback for an accepted choice starts
+with the sample at t+1, survives forced switches, and closes at the next
+scheduled point that allows a fresh choice, where the update is applied before
+the next selection. Blocked requests open nothing. A failure discards the
+unfinished window; completed updates stay. `train` runs episodes back to back
+with one Learner, so table and exploration progress carry over and pending
+feedback never does.
+
 Any failure stops the run cleanly: completed records are kept and the run is
 marked incomplete. Nothing continues after a safety violation. A request the
 timing gate allowed but the adapter still blocked is logged as an integration
@@ -47,6 +56,7 @@ from traffic_cps.contracts import (
     SubmissionStatus,
 )
 from traffic_cps.controllers import Controller
+from traffic_cps.learning import Learner, add_sample, open_interval
 from traffic_cps.safety import SafetyMonitor
 from traffic_cps.scenario import SCENARIO_MANIFEST
 from traffic_cps.sensor import SensorFailure, TrafficSensor
@@ -83,7 +93,10 @@ class Runtime:
         notify: Callable[[str], None] | None = None,
         run_id: str | None = None,
         connection_wrapper: Callable[[Any], Any] | None = None,
+        learner: Learner | None = None,
     ):
+        if mode is Mode.TRAIN and learner is None:
+            raise ValueError("training mode requires a Learner")
         self.config = config
         self.scenario_dir = Path(scenario_dir)
         self.controller = controller
@@ -92,12 +105,15 @@ class Runtime:
         self.mode = mode
         self.notify = notify
         self.connection_wrapper = connection_wrapper  # fault injection in tests only
+        self.learner = learner
+        self.pending = None  # PendingFeedback for the last accepted training choice; never crosses episodes
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         self.run_id = run_id or f"{controller.name}-{stamp}-{uuid.uuid4().hex[:6]}"
         self.counters = {k: 0 for k in (
             "ticks", "observations", "scheduled_checks", "constraint_holds", "eligible_choices", "decisions",
             "accepted_requests", "switches_requested", "blocked_requests", "unexpected_blocks", "operating_actions",
             "signal_changes", "safety_overrides", "safety_violations", "retrieval_retries",
+            "learning_updates", "feedback_discarded",
         )}
         self.final_valid_time: int | None = None
         self.trace_ok = True
@@ -134,6 +150,10 @@ class Runtime:
         except Exception as exc:  # every failure ends the run explicitly; nothing is swallowed
             failure = f"{type(exc).__name__}: {exc}"
             self._log_error("run", exc)
+            try:
+                self._discard("run_failed", self.adapter.time if self.adapter.time is not None else 0)
+            except Exception:
+                self.trace_ok = False
         finally:
             self.adapter.close()
 
@@ -145,6 +165,7 @@ class Runtime:
                 "planned_horizon_s": self.horizon_s,
                 "final_valid_time_s": self.final_valid_time,
                 "counters": self.counters,
+                "learning": self._learning_summary(),
                 "finished_at_utc": _utc_now(),
             })
             self.writer.close()
@@ -182,7 +203,9 @@ class Runtime:
             },
             "started_at_utc": _utc_now(),
         })
-        ev.write_json_exclusive(self.run_dir / ev.POLICY_START, None)  # baselines have no Q-table
+        # Baselines have no Q-table; Q-learning records the full starting table (Section F).
+        ev.write_json_exclusive(self.run_dir / ev.POLICY_START,
+                                self.learner.snapshot() if self.learner is not None else None)
 
     def _start(self) -> None:
         cfg = self.config
@@ -218,6 +241,11 @@ class Runtime:
 
         obs = self.sensor.observe(raw, self.adapter.timing(), quality)      # step 3
         self._log_observation(obs)
+        if self.pending is not None:
+            self.pending = add_sample(self.pending, obs)
+
+        if t == H:                                                          # step 4
+            self._close_at_horizon(obs)
 
         if t < H:                                                           # step 5
             timing = self.adapter.timing()
@@ -248,6 +276,8 @@ class Runtime:
             return
 
         self.counters["eligible_choices"] += 1
+        if self.pending is not None:  # update before the next selection
+            self._close_pending(obs)
         context = DecisionContext(
             observation=obs, allowed=(Direction.NS, Direction.WE), mode=self.mode,
             minimum_green_s=cfg.signal.minimum_green_s, green_service_limit_s=cfg.signal.green_service_limit_s,
@@ -262,6 +292,49 @@ class Runtime:
             self.counters["accepted_requests"] += 1
             if not decision.retains:
                 self.counters["switches_requested"] += 1
+            if self.mode is Mode.TRAIN:
+                if decision.q_state is None:
+                    raise RunStop(f"training decision {decision.decision_id} has no Q-state")
+                self.pending = open_interval(decision.decision_id, decision.q_state, decision.requested, t)
+                self.learner.schedule.accepted()
+
+    # ------------------------------------------------------------------
+    # Learning feedback (training only)
+    # ------------------------------------------------------------------
+
+    def _close_pending(self, obs: Observation) -> None:
+        update = self.learner.close(self.pending, self.learner.encode(obs), obs.time)
+        self.pending = None
+        self.writer.append("learning_update", obs.time, ev.learning_update_payload(update),
+                           event_id=f"upd-{update.policy_revision}")
+        self.counters["learning_updates"] += 1
+
+    def _close_at_horizon(self, obs: Observation) -> None:
+        """Section E step 4: no command; update only if this boundary would allow a fresh choice."""
+        if self.pending is None:
+            return
+        timing = self.adapter.timing()
+        reason = hold_reason(timing, self.config.signal.minimum_green_s)
+        if reason is None and self.adapter.service_limit_reached() \
+                and obs.counts_by_direction[timing.current_green.other] > 0:
+            reason = "service_limit_due"  # a due forced switch is not an eligible bootstrap boundary
+        if reason is None:
+            self._close_pending(obs)
+        else:
+            self._discard(reason.value if isinstance(reason, HoldReason) else reason, obs.time)
+
+    def _discard(self, reason: str, t: int) -> None:
+        if self.pending is None:
+            return
+        pending, self.pending = self.pending, None
+        self.writer.append("feedback_discarded", t, ev.feedback_discarded_payload(pending, reason, t))
+        self.counters["feedback_discarded"] += 1
+
+    def _learning_summary(self) -> dict | None:
+        if self.learner is None:
+            return None
+        return {"mode": self.mode, "policy_revision": self.learner.table.revision,
+                "table_states": len(self.learner.table), **self.learner.schedule.to_json()}
 
     # ------------------------------------------------------------------
     # Logging helpers
@@ -313,3 +386,45 @@ class Runtime:
             self.writer.append("error", self.adapter.time if self.adapter.time is not None else 0, payload)
         except Exception:
             self.trace_ok = False  # the error itself could not be recorded; reported in RunResult
+
+
+# ----------------------------------------------------------------------
+# Training episodes
+# ----------------------------------------------------------------------
+
+def train(config: Config, episodes: int, output_dir: Path | str, horizon_s: int | None = None,
+          notify: Callable[[str], None] | None = None, learner: Learner | None = None,
+          on_episode: Callable[[int, RunResult], None] | None = None) -> tuple[Learner, list[RunResult]]:
+    """Run `episodes` training episodes on seeds training_seed_start, +1, ... with one Learner.
+
+    Each episode gets freshly generated traffic under output_dir/scenarios and its own run
+    directory. Training stops at the first incomplete episode. No table file is written here;
+    the event logs reconstruct the table (checkpoints arrive in chunk 5).
+    """
+    from traffic_cps.controllers.q_learning import QLearningController
+    from traffic_cps.scenario import create_scenario, profile_for_index
+
+    if isinstance(episodes, bool) or not isinstance(episodes, int) or episodes <= 0:
+        raise ValueError(f"episodes must be a positive integer, got {episodes!r}")
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=False)  # never overwrite an earlier training output
+    horizon = config.simulation.horizon_s if horizon_s is None else horizon_s
+    held_out = set(config.experiment.development_seeds) | set(config.experiment.final_seeds)
+    learner = learner or Learner(config)
+    results: list[RunResult] = []
+    for index in range(episodes):
+        seed = config.experiment.training_seed_start + index
+        if seed in held_out:
+            raise ValueError(f"training seed {seed} is a development or final seed")
+        scenario = output_dir / "scenarios" / f"seed_{seed:03d}"
+        create_scenario(config.network.directory, scenario, seed, profile_for_index(index), horizon)
+        runtime = Runtime(config, scenario, QLearningController(learner), output_dir, horizon_s=horizon,
+                          mode=Mode.TRAIN, notify=notify, learner=learner,
+                          run_id=f"train-ep{index + 1:03d}-seed{seed:03d}")
+        result = runtime.run()
+        results.append(result)
+        if on_episode is not None:
+            on_episode(index + 1, result)
+        if result.completion is not CompletionStatus.COMPLETED or not result.persistence_ok:
+            break
+    return learner, results

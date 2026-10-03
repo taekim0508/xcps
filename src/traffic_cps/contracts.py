@@ -237,6 +237,9 @@ class DecisionSource(str, Enum):
 
     QUEUE_RULE = "queue_rule"
     FIXED_SCHEDULE = "fixed_schedule"
+    Q_GREEDY = "q_greedy"              # highest learned value (current green wins ties)
+    Q_EXPLORATION = "q_exploration"    # random training choice, even when it matches the greedy one
+    QUEUE_FALLBACK = "queue_fallback"  # frozen evaluation without full coverage: the queue rule decides
     TEST_SCRIPT = "test_script"  # scripted decisions used only by tests
 
 
@@ -246,7 +249,15 @@ class DecisionReason(str, Enum):
     SERVICE_LIMIT_COMPETING_DEMAND = "service_limit_competing_demand"
     FIXED_TARGET_REACHED = "fixed_target_reached"
     FIXED_TARGET_NOT_REACHED = "fixed_target_not_reached"
+    HIGHER_Q_VALUE = "higher_q_value"
+    EQUAL_Q_VALUES = "equal_q_values"
+    EXPLORATION = "exploration"
     SCRIPTED = "scripted"
+
+
+class FallbackReason(str, Enum):
+    UNSEEN_STATE = "unseen_state"
+    INCOMPLETE_ACTION_COVERAGE = "incomplete_action_coverage"
 
 
 class HoldReason(str, Enum):
@@ -285,13 +296,88 @@ class Decision:
     epsilon: float | None
     policy_revision: int | None
     fixed_green_target_s: int | None = None  # fixed-time decisions only
+    # Q-learning decisions only (also set on a queue fallback, which still has a state):
+    q_state: "QState | None" = None
+    q_values: Mapping[Direction, float] | None = None       # decision-time values, before any later update
+    q_update_counts: Mapping[Direction, int] | None = None  # completed updates per action at decision time
+    exploration_draw: float | None = None                   # training: the explore-or-not uniform draw
+    fallback_reason: FallbackReason | None = None
 
     def __post_init__(self) -> None:
         _frozen_mapping(self, "scores", "counts")
+        if self.q_values is not None:
+            _frozen_mapping(self, "q_values", "q_update_counts")
 
     @property
     def retains(self) -> bool:
         return self.requested is self.current_green
+
+
+# ----------------------------------------------------------------------
+# Learning (chunk 4)
+# ----------------------------------------------------------------------
+
+@dataclass(frozen=True, order=True)
+class QState:
+    """(ns_queue_bin, we_queue_bin, current_green, elapsed_green_bin); exists only for green observations."""
+
+    ns_bin: int
+    we_bin: int
+    green: Direction
+    elapsed_bin: int
+
+    def key(self) -> list:
+        return [self.ns_bin, self.we_bin, self.green.value, self.elapsed_bin]
+
+
+@dataclass(frozen=True)
+class PendingFeedback:
+    """One accepted training choice awaiting its next eligible boundary. Never restored across episodes.
+
+    Samples are the observations at start+1, start+2, ...; the observation at `start_time` only
+    defines the starting state.
+    """
+
+    decision_id: str
+    state: QState
+    action: Direction
+    start_time: int
+    sample_ids: tuple[str, ...] = ()
+    rewards: tuple[float, ...] = ()
+
+    @property
+    def elapsed_s(self) -> int:
+        return len(self.rewards)
+
+
+@dataclass(frozen=True)
+class LearningUpdate:
+    decision_id: str
+    start_time: int
+    end_time: int
+    sample_ids: tuple[str, ...]
+    rewards: tuple[float, ...]
+    state: QState
+    next_state: QState
+    action: Direction
+    duration_s: int
+    raw_reward_sum: float
+    discounted_reward: float
+    discount_per_second: float
+    bootstrap_multiplier: float
+    bootstrap_values: Mapping[Direction, float]
+    bootstrap_allowed: tuple[Direction, ...]
+    bootstrap_max: float
+    alpha: float
+    target: float
+    old_q: float
+    new_q: float
+    update_count_before: int
+    update_count_after: int
+    policy_revision: int  # revision after this update
+
+    def __post_init__(self) -> None:
+        _frozen_mapping(self, "bootstrap_values")
 
 
 class CompletionStatus(str, Enum):

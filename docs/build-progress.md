@@ -2,7 +2,7 @@
 
 Tracks the 8 development chunks and the current position. Chunks follow the design doc's "Implementation order" (steps 0 to 7) exactly. The design doc remains the specification; this file only records status and decisions.
 
-**Current chunk:** 3 (awaiting review)
+**Current chunk:** 4 (awaiting review)
 
 Status values: `not started`, `in progress`, `awaiting review`, `done`.
 
@@ -13,8 +13,8 @@ Status values: `not started`, `in progress`, `awaiting review`, `done`.
 | 0 | Foundation: scaffold, environment, scenario | done | `doctor` passes on 1.24.0; `scenario build` produces a validated network |
 | 1 | Simulator interface and safety | done | Real SUMO steps under the monitor with zero violations; fault-injection cases pass |
 | 2 | Thin vertical slice | done | `run` -> `explain` -> `report.html` on one short run; peak saturation check recorded |
-| 3 | Fixed-time and full runtime enforcement | awaiting review | Full-horizon fixed and queue runs with correct attribution |
-| 4 | Tabular Q-learning | not started | Short training learns; frozen evaluation leaves the table unchanged |
+| 3 | Fixed-time and full runtime enforcement | done | Full-horizon fixed and queue runs with correct attribution |
+| 4 | Tabular Q-learning | awaiting review | Short training learns; frozen evaluation leaves the table unchanged |
 | 5 | Persistence and failure-safe shutdown | not started | Train -> interrupt -> resume -> evaluate cycle works |
 | 6 | Full explanation layer | not started | Fidelity checks pass on all three controllers |
 | 7 | Experiments and results | not started | 7a: code and tests pass. 7b: tuning, training, comparison, robustness runs, honest results summary |
@@ -69,7 +69,13 @@ Status values: `not started`, `in progress`, `awaiting review`, `done`.
 
 ### 4. Tabular Q-learning
 - Files: `learning.py`, `controllers/q_learning.py`, `runtime.py` (train/evaluate), `cli.py` (`train`, basic)
+- Approved choices (2026-10-03): (1) no table file until chunk 5; frozen evaluation takes the table in memory (tests only) and the event log (`policy_start.json` plus ordered `learning_update` events) already reconstructs it; `run --controller q_learning --checkpoint` arrives with chunk 5. (2) Evaluation tracks no feedback windows and emits no feedback events; per-second outcomes are in the observations, and `learning_update` always means the table changed. (3) Development evaluations at episodes 5/10/15 move to chunk 5 (they need milestone files). Exploration draw order: one `random()` for explore-or-not, then `choice()` only when exploring.
 - Tests: reward added once per second to the pending interval (Section J); bin edges; hand-computed Q-update; counts only on completed updates; epsilon progress; coverage fallback; feedback discard at cutoff/failure; frozen evaluation never updates
+
+- Result (2026-10-03): 241 unit + 78 integration tests pass in the container. `train --episodes 2 --horizon 300` exits 0; the second episode's `policy_start.json` is rebuilt exactly from the first episode's start plus its ordered updates (old values validated).
+- Probe (not an experiment result): 3 full-hour training episodes (seeds 0 to 2) took 14 s in total; 1,467 updates, 2 discarded at cutoffs, epsilon 1.0 -> 0.48; 23 states, 19 with both actions updated. A frozen evaluation on development seed 100 used the learned values for all 441 free choices (0 fallbacks).
+- Revises the chunk 2 bin concern: under mostly random exploration, queues grow larger than under the queue rule, and updates reached queue bins 0 to 3 (not only 0 and 1). Coverage under the final 15-episode budget is still to be measured in chunk 7.
+- Not in chunk 4: table/checkpoint files, resume, milestone development evaluations (chunk 5); counterfactuals, historical-revision replay in explanations, global policy view (chunk 6).
 
 ### 5. Persistence and failure-safe shutdown
 - Files: `checkpoints.py`, `events.py` (all event types, manifests, `policy_start.json`), `runtime.py` (shutdown), `cli.py` (`--resume`, milestones, seed allocation)
@@ -110,3 +116,6 @@ Status values: `not started`, `in progress`, `awaiting review`, `done`.
 - 2026-10-03: Chunk 2 approved (committed by Tae, 8d5d757). Baseline before chunk 3: 201 tests pass in the container. Chunk 3 planning started.
 - 2026-10-03: Chunk 3 plan approved; reward-per-second test moved to chunk 4; started.
 - 2026-10-03: Chunk 3 implemented; all tests pass; awaiting review.
+- 2026-10-03: Chunk 3 approved (committed by Tae, fa3dc63). Chunk 4 planning started.
+- 2026-10-03: Chunk 4 plan approved (Q1 and Q2 option A); started.
+- 2026-10-03: Chunk 4 implemented; all tests pass; awaiting review.
