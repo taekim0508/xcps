@@ -8,10 +8,13 @@ from __future__ import annotations
 
 import argparse
 import importlib.metadata
+import json
 import re
 import shutil
+import signal
 import subprocess
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 
 from traffic_cps import PYTHON_MAJOR_MINOR, SUMO_VERSION
@@ -161,7 +164,7 @@ def cmd_saturation_check(args: argparse.Namespace) -> int:
 # run / explain / report
 # --------------------------------------------------------------------------
 
-CONTROLLERS = ("fixed", "queue")
+CONTROLLERS = ("fixed", "queue", "q_learning")
 
 
 def _make_controller(name: str, config: Config):
@@ -173,23 +176,76 @@ def _make_controller(name: str, config: Config):
     return {"queue": QueueController}[name]()
 
 
+@contextmanager
+def _interruptible(stop):
+    """First Ctrl-C: stop after the current simulated second and save. Second Ctrl-C: default behavior."""
+    def handler(signum, frame):
+        stop.request("interrupt requested (Ctrl-C)")
+        signal.signal(signal.SIGINT, previous)
+        print("interrupt: stopping after the current simulated second and saving completed learning; "
+              "press Ctrl-C again to abort immediately", file=sys.stderr)
+
+    previous = signal.signal(signal.SIGINT, handler)
+    try:
+        yield
+    finally:
+        signal.signal(signal.SIGINT, previous)
+
+
+def _notify(message: str) -> None:
+    print(f"warning: {message}", file=sys.stderr)
+
+
+def _load_frozen_learner(config: Config, checkpoint: Path, scenario: Path, horizon: int):
+    """Validate a checkpoint for frozen evaluation on this scenario before any traffic starts."""
+    from traffic_cps.checkpoints import CheckpointStore, compatibility, file_sha256, learner_from_checkpoint
+    from traffic_cps.scenario import SCENARIO_MANIFEST
+
+    try:
+        network = json.loads((scenario / SCENARIO_MANIFEST).read_text(encoding="utf-8"))["network"]
+    except (OSError, ValueError, KeyError) as exc:
+        raise ConfigError(f"cannot read the scenario's network identity: {exc}") from exc
+    data = CheckpointStore(checkpoint.parent).load(checkpoint, compatibility(config, network, horizon), "evaluate")
+    provenance = {"purpose": "frozen_evaluation", "checkpoint_path": str(checkpoint),
+                  "checkpoint_id": data["checkpoint_id"], "checkpoint_file_sha256": file_sha256(checkpoint),
+                  "integrity_sha256": data["integrity_sha256"]}
+    return learner_from_checkpoint(config, data), provenance
+
+
 def cmd_run(args: argparse.Namespace) -> int:
+    from traffic_cps.checkpoints import CheckpointError
+    from traffic_cps.contracts import Mode
     from traffic_cps.report import build_report
-    from traffic_cps.runtime import Runtime
+    from traffic_cps.runtime import Runtime, StopRequest
 
     try:
         config = load_config(args.config)
     except ConfigError as exc:
         print(f"config: FAIL {exc}", file=sys.stderr)
         return EXIT_INVALID
-
-    def notify(message: str) -> None:
-        print(f"warning: {message}", file=sys.stderr)
-
+    if (args.controller == "q_learning") != (args.checkpoint is not None):
+        print("run: FAIL --checkpoint is required for q_learning and only valid with it", file=sys.stderr)
+        return EXIT_INVALID
+    horizon = config.simulation.horizon_s if args.horizon is None else args.horizon
+    learner, provenance = None, None
     try:
-        runtime = Runtime(config, args.scenario, _make_controller(args.controller, config), args.output,
-                          horizon_s=args.horizon, notify=notify)
-        result = runtime.run()
+        if args.controller == "q_learning":
+            from traffic_cps.controllers.q_learning import QLearningController
+
+            learner, provenance = _load_frozen_learner(config, args.checkpoint, args.scenario, horizon)
+            controller = QLearningController(learner)
+        else:
+            controller = _make_controller(args.controller, config)
+    except (CheckpointError, ConfigError) as exc:
+        print(f"run: FAIL {exc}", file=sys.stderr)
+        return EXIT_INVALID
+
+    stop = StopRequest()
+    try:
+        runtime = Runtime(config, args.scenario, controller, args.output, horizon_s=horizon, notify=_notify,
+                          mode=Mode.EVALUATE, learner=learner, stop=stop, provenance=provenance)
+        with _interruptible(stop):
+            result = runtime.run()
     except Exception as exc:  # setup failures before the run loop (e.g. output exists)
         print(f"run: FAIL {type(exc).__name__}: {exc}", file=sys.stderr)
         return EXIT_INVALID
@@ -209,26 +265,32 @@ def cmd_run(args: argparse.Namespace) -> int:
 
 
 def cmd_train(args: argparse.Namespace) -> int:
+    from traffic_cps.checkpoints import CheckpointError
     from traffic_cps.report import build_report
-    from traffic_cps.runtime import train
+    from traffic_cps.runtime import StopRequest, train
 
     try:
         config = load_config(args.config)
     except ConfigError as exc:
         print(f"config: FAIL {exc}", file=sys.stderr)
         return EXIT_INVALID
-    episodes = config.experiment.training_episodes if args.episodes is None else args.episodes
+    if args.resume is None:
+        if args.output is None or args.additional_episodes is not None:
+            print("train: FAIL fresh training needs --output (and optionally --episodes)", file=sys.stderr)
+            return EXIT_INVALID
+        episodes = config.experiment.training_episodes if args.episodes is None else args.episodes
+    elif args.output is not None or args.episodes is not None or args.additional_episodes is None:
+        print("train: FAIL resume needs --resume and --additional-episodes only; it continues in the "
+              "checkpoint's training folder", file=sys.stderr)
+        return EXIT_INVALID
     reports_ok = True
 
-    def notify(message: str) -> None:
-        print(f"warning: {message}", file=sys.stderr)
-
-    def on_episode(n: int, result) -> None:
+    def on_episode(result) -> None:
         nonlocal reports_ok
-        learning = result.counters
-        print(f"episode {n}/{episodes} {result.run_id}: {result.completion.value}; "
-              f"updates {learning['learning_updates']}, discarded {learning['feedback_discarded']}, "
-              f"accepted choices {learning['accepted_requests']}; log persisted: {result.persistence_ok}")
+        c = result.counters
+        print(f"{result.run_id}: {result.completion.value}; updates {c['learning_updates']}, discarded "
+              f"{c['feedback_discarded']}, accepted choices {c['accepted_requests']}; log persisted: "
+              f"{result.persistence_ok}; checkpoint: {result.checkpoint_status} ({result.last_checkpoint_id})")
         if result.failure:
             print(f"failure: {result.failure}", file=sys.stderr)
         try:
@@ -237,18 +299,35 @@ def cmd_train(args: argparse.Namespace) -> int:
             reports_ok = False
             print(f"report: FAIL {type(exc).__name__}: {exc}", file=sys.stderr)
 
+    stop = StopRequest()
     try:
-        learner, results = train(config, episodes, args.output, horizon_s=args.horizon, notify=notify,
-                                 on_episode=on_episode)
-    except Exception as exc:  # setup failures before an episode starts (output exists, bad seeds, ...)
+        with _interruptible(stop):
+            if args.resume is None:
+                outcome = train(config, episodes, args.output, horizon_s=args.horizon, notify=_notify,
+                                stop=stop, on_episode=on_episode)
+            else:
+                outcome = train(config, horizon_s=args.horizon, notify=_notify, resume=args.resume,
+                                additional_episodes=args.additional_episodes, stop=stop, on_episode=on_episode)
+    except (CheckpointError, ConfigError, ValueError, FileExistsError) as exc:  # before any traffic
         print(f"train: FAIL {type(exc).__name__}: {exc}", file=sys.stderr)
         return EXIT_INVALID
-    completed = sum(r.completion is CompletionStatus.COMPLETED and r.persistence_ok for r in results)
-    print(f"training: {completed}/{episodes} episodes completed; policy revision {learner.table.revision}; "
-          f"{len(learner.table)} states; epsilon {learner.schedule.epsilon:.4f} after "
-          f"{learner.schedule.accepted_choices} accepted choices")
-    print("note: no table file is written yet; the event logs reconstruct the table (checkpoints: chunk 5)")
-    return EXIT_OK if completed == episodes and reports_ok else EXIT_FAILURE
+    except Exception as exc:
+        print(f"train: FAIL {type(exc).__name__}: {exc}", file=sys.stderr)
+        return EXIT_FAILURE
+
+    lr = outcome.learner
+    print(f"training {outcome.training_dir.name}: {outcome.completed_episodes}/{outcome.target_completed} "
+          f"episodes completed; policy revision {lr.table.revision}; {len(lr.table)} states; epsilon "
+          f"{lr.schedule.epsilon:.4f} after {lr.schedule.accepted_choices} accepted choices")
+    print(f"latest checkpoint: {outcome.training_dir / 'checkpoints' / 'training_latest.json'}")
+    for d in outcome.development:
+        print(f"development evaluation episode {d['episode']} seed {d['seed']}: "
+              f"{'completed' if d['ok'] else 'FAILED'} ({d['run_id']})")
+    if outcome.stopped:
+        print(f"stopped: {outcome.stopped}", file=sys.stderr)
+    if outcome.persistence_failure:
+        print(f"persistence failure: {outcome.persistence_failure}", file=sys.stderr)
+    return EXIT_OK if outcome.ok and reports_ok else EXIT_FAILURE
 
 
 def cmd_explain(args: argparse.Namespace) -> int:
@@ -318,13 +397,16 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--scenario", type=Path, required=True)
     run.add_argument("--horizon", type=int, help="override the configured horizon (must match the scenario)")
     run.add_argument("--output", type=Path, required=True)
+    run.add_argument("--checkpoint", type=Path, help="frozen Q-learning checkpoint (q_learning only)")
     run.set_defaults(func=cmd_run)
 
     tr = sub.add_parser("train", help="train the tabular Q-learning controller")
     tr.add_argument("--config", type=Path, required=True)
-    tr.add_argument("--episodes", type=int, help="number of episodes (default: experiment.training_episodes)")
-    tr.add_argument("--horizon", type=int, help="override the configured horizon (short smoke training)")
-    tr.add_argument("--output", type=Path, required=True)
+    tr.add_argument("--episodes", type=int, help="fresh: number of episodes (default: experiment.training_episodes)")
+    tr.add_argument("--horizon", type=int, help="override the configured horizon (must match on resume)")
+    tr.add_argument("--output", type=Path, help="fresh: new training folder")
+    tr.add_argument("--resume", type=Path, help="resume from this explicitly selected checkpoint")
+    tr.add_argument("--additional-episodes", type=int, help="resume: episodes to add")
     tr.set_defaults(func=cmd_train)
 
     exp = sub.add_parser("explain", help="explain one recorded decision or event")

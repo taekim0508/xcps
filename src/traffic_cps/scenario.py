@@ -317,7 +317,7 @@ def create_scenario(network_dir: Path | str, out_dir: Path | str, seed: int,
     network_dir, out_dir = Path(network_dir), Path(out_dir)
     if out_dir.exists() and any(out_dir.iterdir()):
         raise ScenarioError(f"output directory {out_dir} already exists and is not empty; refusing to overwrite")
-    network_manifest = _read_network_manifest(network_dir)
+    network_manifest = read_network_manifest(network_dir)
 
     write_demand(out_dir, seed, profile, horizon_s)
     shutil.copyfile(network_dir / NETWORK_FILE, out_dir / NETWORK_FILE)
@@ -350,7 +350,7 @@ def _read_calibration(network_dir: Path) -> list[dict]:
         raise ScenarioError(f"unreadable calibration record {path}: {exc}") from exc
 
 
-def _read_network_manifest(network_dir: Path) -> dict:
+def read_network_manifest(network_dir: Path) -> dict:
     path = network_dir / NETWORK_MANIFEST
     try:
         manifest = json.loads(path.read_text(encoding="utf-8"))

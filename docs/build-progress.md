@@ -2,7 +2,7 @@
 
 Tracks the 8 development chunks and the current position. Chunks follow the design doc's "Implementation order" (steps 0 to 7) exactly. The design doc remains the specification; this file only records status and decisions.
 
-**Current chunk:** 4 (awaiting review)
+**Current chunk:** 5 (awaiting review)
 
 Status values: `not started`, `in progress`, `awaiting review`, `done`.
 
@@ -14,8 +14,8 @@ Status values: `not started`, `in progress`, `awaiting review`, `done`.
 | 1 | Simulator interface and safety | done | Real SUMO steps under the monitor with zero violations; fault-injection cases pass |
 | 2 | Thin vertical slice | done | `run` -> `explain` -> `report.html` on one short run; peak saturation check recorded |
 | 3 | Fixed-time and full runtime enforcement | done | Full-horizon fixed and queue runs with correct attribution |
-| 4 | Tabular Q-learning | awaiting review | Short training learns; frozen evaluation leaves the table unchanged |
-| 5 | Persistence and failure-safe shutdown | not started | Train -> interrupt -> resume -> evaluate cycle works |
+| 4 | Tabular Q-learning | done | Short training learns; frozen evaluation leaves the table unchanged |
+| 5 | Persistence and failure-safe shutdown | awaiting review | Train -> interrupt -> resume -> evaluate cycle works |
 | 6 | Full explanation layer | not started | Fidelity checks pass on all three controllers |
 | 7 | Experiments and results | not started | 7a: code and tests pass. 7b: tuning, training, comparison, robustness runs, honest results summary |
 
@@ -79,7 +79,14 @@ Status values: `not started`, `in progress`, `awaiting review`, `done`.
 
 ### 5. Persistence and failure-safe shutdown
 - Files: `checkpoints.py`, `events.py` (all event types, manifests, `policy_start.json`), `runtime.py` (shutdown), `cli.py` (`--resume`, milestones, seed allocation)
+- Approved choices (2026-10-03): (1) Ctrl-C sets a stop flag checked at the tick boundary; then unfinished feedback is discarded, a shutdown checkpoint is saved, exit 1. (2) Resume requires the same horizon; frozen evaluation may use any valid horizon and records it. (3) A failed development evaluation is reported separately, training continues, and `train` exits 1 at the end. (4) Version compatibility: SUMO, TraCI, sumolib exact; Python major.minor. Also in this chunk: milestone development evaluations (from chunk 4) and `run --controller q_learning --checkpoint`. Built in two internal steps: (a) checkpoints, resume, shutdown, failure policy; (b) milestones and development evaluations.
 - Tests: zero entries, RNG, counters round-trip; missing/corrupt/incompatible rejection; latest/previous rotation; interrupted write; log and checkpoint write failures give correct exit codes
+
+- Result (2026-10-03): 268 unit + 95 integration tests pass in the container. End to end with the default config (H=3600): `train --episodes 5` exit 0 in 44 s (5 episodes, checkpoints through generation 28, milestone `episode_005.json`, development evaluations on seeds 100 to 102 all completed); `train --resume ... --additional-episodes 1` exit 0 (attempt 6, seed 5); `run --controller q_learning --checkpoint milestones/episode_005.json` on seed 101 exit 0, 623 learned choices and 3 queue fallbacks (`incomplete_action_coverage`). Per-episode update counts match the chunk 4 probe exactly (deterministic).
+- Resume equivalence: training 2 episodes straight and training 1 then resuming 1 give identical tables, epsilon, and RNG state.
+- Attempt index on resume: first implemented by counting run folders and wrongly described as a gap in the design doc. Section B already specifies it; corrected to read each run manifest's `episode_attempt_index` and stop with a recovery error if any manifest is missing or corrupt.
+- Changes to earlier code: training run IDs are now `train-attemptNNN-seedSSS` (attempt index, not episode number); `train()` returns a `TrainingResult`; `EventWriter` remembers a failed write or flush and never writes again; a regression where a failed final log write still reported `persistence_ok` was caught by the chunk 3 test and fixed.
+- Not separately tested: a flush-only failure (the log-failure test fails the write first; flush shares the path); the directory-fsync durability text.
 
 ### 6. Full explanation layer
 - Files: `explain.py` (full), `report.py` (full), `cli.py` (`summarize`), `summary.json`/`metrics.csv`
@@ -119,3 +126,6 @@ Status values: `not started`, `in progress`, `awaiting review`, `done`.
 - 2026-10-03: Chunk 3 approved (committed by Tae, fa3dc63). Chunk 4 planning started.
 - 2026-10-03: Chunk 4 plan approved (Q1 and Q2 option A); started.
 - 2026-10-03: Chunk 4 implemented; all tests pass; awaiting review.
+- 2026-10-03: Chunk 4 approved (committed by Tae, a477c0e). Chunk 5 planning started.
+- 2026-10-03: Chunk 5 plan approved (all recommended options); started.
+- 2026-10-03: Chunk 5 implemented; all tests pass; awaiting review.

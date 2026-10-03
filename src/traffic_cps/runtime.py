@@ -29,9 +29,11 @@ diagnostic and discarded, never queued for a later second.
 from __future__ import annotations
 
 import importlib.metadata
+import json
 import shutil
 import sys
 import uuid
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -40,6 +42,7 @@ from traffic_cps import SUMO_VERSION, __version__
 from traffic_cps import events as ev
 from traffic_cps.actuator import TrafficActuator
 from traffic_cps.adapter import SumoAdapter
+from traffic_cps.checkpoints import CheckpointError
 from traffic_cps.config import Config, config_digest, sha256_file
 from traffic_cps.contracts import (
     CompletionStatus,
@@ -68,6 +71,18 @@ class RunStop(RuntimeError):
     """A condition that ends the run as incomplete (already logged where possible)."""
 
 
+class StopRequest:
+    """Set by an interrupt handler; the runtime honors it only at the end of a simulated second,
+    after that second's records are flushed, so no update or snapshot is half-applied."""
+
+    def __init__(self) -> None:
+        self.requested = False
+        self.reason: str | None = None
+
+    def request(self, reason: str = "interrupt requested") -> None:
+        self.requested, self.reason = True, reason
+
+
 def hold_reason(state, minimum_green_s: int) -> HoldReason | None:
     """Timing gate for a scheduled control point (works on an Observation or SignalTiming)."""
     if state.transition_target is not None:
@@ -94,6 +109,9 @@ class Runtime:
         run_id: str | None = None,
         connection_wrapper: Callable[[Any], Any] | None = None,
         learner: Learner | None = None,
+        session: "TrainingSession | None" = None,
+        stop: StopRequest | None = None,
+        provenance: dict | None = None,
     ):
         if mode is Mode.TRAIN and learner is None:
             raise ValueError("training mode requires a Learner")
@@ -106,6 +124,10 @@ class Runtime:
         self.notify = notify
         self.connection_wrapper = connection_wrapper  # fault injection in tests only
         self.learner = learner
+        self.session = session          # training checkpoints; None for evaluation and baselines
+        self.stop = stop
+        self.provenance = provenance    # traffic seed, attempt, learning source, checkpoint identity
+        self.checkpoint_status: str | None = None
         self.pending = None  # PendingFeedback for the last accepted training choice; never crosses episodes
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         self.run_id = run_id or f"{controller.name}-{stamp}-{uuid.uuid4().hex[:6]}"
@@ -150,35 +172,107 @@ class Runtime:
         except Exception as exc:  # every failure ends the run explicitly; nothing is swallowed
             failure = f"{type(exc).__name__}: {exc}"
             self._log_error("run", exc)
-            try:
-                self._discard("run_failed", self.adapter.time if self.adapter.time is not None else 0)
-            except Exception:
-                self.trace_ok = False
+            stopped = self.stop is not None and self.stop.requested
+            self._discard("interrupted" if stopped else "run_failed",
+                          self.adapter.time if self.adapter.time is not None else 0)
         finally:
             self.adapter.close()
 
-        persistence_ok = True
+        if self.session is not None:
+            failure = self._final_checkpoint(completion, failure)
+
+        persistence_ok = self.writer.failed is None
+        if persistence_ok:
+            try:
+                self.writer.append("run_end", self.adapter.time or 0, {
+                    "completion": completion,
+                    "failure": failure,
+                    "planned_horizon_s": self.horizon_s,
+                    "final_valid_time_s": self.final_valid_time,
+                    "counters": self.counters,
+                    "learning": self._learning_summary(),
+                    "checkpoint_status": self.checkpoint_status,
+                    "finished_at_utc": _utc_now(),
+                })
+            except Exception as exc:
+                persistence_ok = False
+                failure = failure or f"event log write failed: {exc}"
         try:
-            self.writer.append("run_end", self.adapter.time or 0, {
-                "completion": completion,
-                "failure": failure,
-                "planned_horizon_s": self.horizon_s,
-                "final_valid_time_s": self.final_valid_time,
-                "counters": self.counters,
-                "learning": self._learning_summary(),
-                "finished_at_utc": _utc_now(),
-            })
             self.writer.close()
         except Exception as exc:
             persistence_ok = False
             failure = failure or f"event log close failed: {exc}"
+        persistence_ok = persistence_ok and self.writer.failed is None
+        if not persistence_ok:
+            self._say(f"event log {self.run_dir / ev.EVENTS_FILE} failed ({self.writer.failed or failure}); "
+                      f"the trace is incomplete")
 
         return RunResult(
             run_id=self.run_id, run_dir=str(self.run_dir), completion=completion,
             trace_complete=persistence_ok and self.trace_ok,
             persistence_ok=persistence_ok, planned_horizon_s=self.horizon_s,
             final_valid_time_s=self.final_valid_time, failure=failure, counters=dict(self.counters),
+            checkpoint_status=self.checkpoint_status,
+            last_checkpoint_id=self.session.last_checkpoint_id if self.session else None,
         )
+
+    def _say(self, message: str) -> None:
+        """Report outside the event log (the log may be the thing that failed)."""
+        if self.notify is not None:
+            self.notify(message)
+
+    # ------------------------------------------------------------------
+    # Checkpoints (training only)
+    # ------------------------------------------------------------------
+
+    def _checkpoint(self, reason: str, t: int) -> None:
+        """Save now; log checkpoint_saved if the log works. Raises CheckpointWriteError."""
+        from traffic_cps.checkpoints import CheckpointWriteError
+
+        try:
+            result = self.session.save(reason, self.run_id, t)
+        except CheckpointWriteError as exc:
+            self.checkpoint_status = exc.status
+            if self.writer.failed is None:
+                try:
+                    self.writer.append("error", t, {"stage": "checkpoint_write", "recovered": False,
+                                                    "reason": reason, "status": exc.status, "message": str(exc),
+                                                    "last_saved_checkpoint": self.session.last_checkpoint_id})
+                    self.writer.flush()
+                except Exception:
+                    self.trace_ok = False
+            raise
+        self.checkpoint_status = "saved"
+        if self.writer.failed is None:
+            self.writer.append("checkpoint_saved", t, ev.checkpoint_saved_payload(
+                result, reason, self.session.progress_summary()))
+            self.writer.flush()
+
+    def _final_checkpoint(self, completion: CompletionStatus, failure: str | None) -> str | None:
+        """Episode-end save after a completed run, or one shutdown save of completed learning after a
+        stop. Never retried against a destination that already failed. Returns the updated failure text."""
+        completed = completion is CompletionStatus.COMPLETED
+        reason = "episode_end" if completed else "shutdown"
+        t = self.adapter.time if self.adapter.time is not None else 0
+        if self.session.failed is not None:
+            self.checkpoint_status = "failed"
+            self._say(f"shutdown checkpoint not attempted: the checkpoint destination already failed "
+                      f"({self.session.failed}); last saved checkpoint: {self.session.last_checkpoint_id or 'none'}")
+            return failure
+        if completed:
+            self.session.episode_completed()
+        try:
+            self._checkpoint(reason, t)
+        except Exception as exc:
+            last = self.session.last_checkpoint_id or "none (no saved training state to restore)"
+            self._say(f"{reason} checkpoint failed: {exc}; last saved checkpoint: {last}")
+            if completed:
+                return f"simulation completed, saving failed: {exc}"
+            return f"{failure}; shutdown checkpoint failed: {exc}"
+        if not completed:
+            self._say(f"shutdown checkpoint saved: {self.session.last_checkpoint_id} (completed learning only; "
+                      f"unfinished feedback discarded)")
+        return failure
 
     def _write_artifacts(self) -> None:
         resolved = self.config.to_dict()
@@ -194,6 +288,7 @@ class Runtime:
             "scenario_dir": str(self.scenario_dir),
             "scenario_manifest_sha256": sha256_file(self.scenario_dir / SCENARIO_MANIFEST),
             "config_sha256": config_digest(self.config),
+            "provenance": self.provenance,
             "versions": {
                 "traffic_cps": __version__,
                 "python": sys.version.split()[0],
@@ -262,6 +357,10 @@ class Runtime:
                 self._control_point(obs)
 
         self.writer.flush()                                                 # step 7
+        if self.session is not None and self.session.due():
+            self._checkpoint("every_n_updates", t)
+        if self.stop is not None and self.stop.requested:
+            raise RunStop(f"stopped at t={t}: {self.stop.reason}")
 
     def _control_point(self, obs: Observation) -> None:
         cfg = self.config
@@ -324,11 +423,16 @@ class Runtime:
             self._discard(reason.value if isinstance(reason, HoldReason) else reason, obs.time)
 
     def _discard(self, reason: str, t: int) -> None:
+        """Drop unfinished feedback from learning; record it when the log still works."""
         if self.pending is None:
             return
         pending, self.pending = self.pending, None
-        self.writer.append("feedback_discarded", t, ev.feedback_discarded_payload(pending, reason, t))
         self.counters["feedback_discarded"] += 1
+        if self.writer.failed is None:
+            try:
+                self.writer.append("feedback_discarded", t, ev.feedback_discarded_payload(pending, reason, t))
+            except Exception:
+                self.trace_ok = False
 
     def _learning_summary(self) -> dict | None:
         if self.learner is None:
@@ -379,6 +483,10 @@ class Runtime:
             raise RunStop(f"safety violation {[v.invariant for v in violations]} at t={violations[0].time}")
 
     def _log_error(self, stage: str, exc: Exception) -> None:
+        if self.writer.failed is not None:  # never write to a known-failed log
+            self.trace_ok = False
+            self._say(f"run stopped: {type(exc).__name__}: {exc}")
+            return
         payload = {"stage": stage, "recovered": False, "kind": type(exc).__name__, "message": str(exc)}
         if isinstance(exc, SensorFailure):
             payload["failures"] = ev.to_jsonable(exc.failures)
@@ -389,42 +497,276 @@ class Runtime:
 
 
 # ----------------------------------------------------------------------
-# Training episodes
+# Training: session (checkpoint bookkeeping) and episodes
 # ----------------------------------------------------------------------
 
-def train(config: Config, episodes: int, output_dir: Path | str, horizon_s: int | None = None,
-          notify: Callable[[str], None] | None = None, learner: Learner | None = None,
-          on_episode: Callable[[int, RunResult], None] | None = None) -> tuple[Learner, list[RunResult]]:
-    """Run `episodes` training episodes on seeds training_seed_start, +1, ... with one Learner.
+class TrainingSession:
+    """Learner plus progress plus checkpoint store for one training folder.
 
-    Each episode gets freshly generated traffic under output_dir/scenarios and its own run
-    directory. Training stops at the first incomplete episode. No table file is written here;
-    the event logs reconstruct the table (checkpoints arrive in chunk 5).
+    Counts completed updates since the last successful save; a save is due at the configured
+    interval. After a failed save the destination is never retried in this process.
     """
+
+    def __init__(self, config: Config, training_id: str, learner: Learner, progress, compat: dict, store):
+        self.config = config
+        self.training_id = training_id
+        self.learner = learner
+        self.progress = progress
+        self.compat = compat
+        self.store = store
+        self.updates_at_last_save = learner.completed_updates
+        self.failed: str | None = None
+        self.last_checkpoint_id: str | None = None
+
+    def due(self) -> bool:
+        return (self.learner.completed_updates - self.updates_at_last_save
+                >= self.config.storage.checkpoint_every_updates)
+
+    def begin_attempt(self) -> int:
+        """Allocate the next persistent episode-attempt index (0-based)."""
+        index = self.progress.episode_attempts
+        self.progress = replace(self.progress, episode_attempts=index + 1)
+        return index
+
+    def episode_completed(self) -> None:
+        self.progress = replace(self.progress, completed_episodes=self.progress.completed_episodes + 1)
+
+    def progress_summary(self) -> dict:
+        lr = self.learner
+        return {"completed_episodes": self.progress.completed_episodes,
+                "episode_attempts": self.progress.episode_attempts,
+                "completed_updates": lr.completed_updates, "policy_revision": lr.table.revision,
+                "accepted_choices": lr.schedule.accepted_choices, "epsilon": lr.schedule.epsilon}
+
+    def save(self, reason: str, run_id: str | None, t: int | None):
+        from traffic_cps.checkpoints import CheckpointWriteError, build_checkpoint
+
+        if self.failed is not None:
+            raise CheckpointWriteError(f"checkpoint destination already failed ({self.failed}); not retrying")
+        generation = self.progress.save_generation + 1
+        data = build_checkpoint(self.learner, replace(self.progress, save_generation=generation),
+                                self.training_id, self.compat,
+                                {"run_id": run_id, "reason": reason, "sim_time_s": t})
+        try:
+            result = self.store.save(data)
+        except CheckpointWriteError as exc:
+            self.failed = str(exc)
+            raise
+        self.progress = replace(self.progress, save_generation=generation)
+        self.updates_at_last_save = self.learner.completed_updates
+        self.last_checkpoint_id = result.checkpoint_id
+        return result
+
+
+@dataclass
+class TrainingResult:
+    training_dir: Path
+    learner: Learner
+    episodes: list[RunResult] = field(default_factory=list)
+    development: list[dict] = field(default_factory=list)   # one record per milestone x development seed
+    target_completed: int = 0
+    completed_episodes: int = 0
+    stopped: str | None = None                               # interrupt reason, if any
+    persistence_failure: str | None = None
+
+    @property
+    def ok(self) -> bool:
+        return (self.completed_episodes == self.target_completed and self.stopped is None
+                and self.persistence_failure is None and all(d["ok"] for d in self.development)
+                and all(r.persistence_ok and r.checkpoint_status == "saved" for r in self.episodes))
+
+
+TRAINING_MANIFEST = "training.manifest.json"
+
+
+def _training_dir_of(checkpoint: Path) -> Path:
+    parent = checkpoint.resolve().parent
+    if parent.name not in ("checkpoints", "milestones"):
+        raise CheckpointError(f"{checkpoint} is not inside a training folder's checkpoints/ or milestones/")
+    return parent.parent
+
+
+def _allocated_attempts(training_dir: Path) -> int:
+    """1 + the highest attempt index recorded in any run manifest under runs/ (0 if none).
+
+    Every run folder must have a readable manifest with an integer attempt index; otherwise resume
+    stops with a recovery error instead of guessing (and possibly reusing a seed)."""
+    runs = training_dir / "runs"
+    if not runs.is_dir():
+        return 0
+    highest = -1
+    for run_dir in sorted(p for p in runs.iterdir() if p.is_dir()):
+        path = run_dir / ev.RUN_MANIFEST
+        try:
+            index = json.loads(path.read_text(encoding="utf-8"))["provenance"]["episode_attempt_index"]
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            raise CheckpointError(f"recovery error: {path} is missing or unreadable ({exc}); cannot tell which "
+                                  f"traffic seeds were already used, so resume stops") from exc
+        if isinstance(index, bool) or not isinstance(index, int) or index < 0:
+            raise CheckpointError(f"recovery error: {path} has invalid episode_attempt_index {index!r}")
+        highest = max(highest, index)
+    return highest + 1
+
+
+def train(config: Config, episodes: int | None = None, output_dir: Path | str | None = None,
+          horizon_s: int | None = None, notify: Callable[[str], None] | None = None, *,
+          resume: Path | str | None = None, additional_episodes: int | None = None,
+          stop: StopRequest | None = None, on_episode: Callable[[RunResult], None] | None = None,
+          connection_wrapper: Callable[[Any], Any] | None = None) -> TrainingResult:
+    """Fresh training (`episodes`, `output_dir`) or resumed training (`resume`, `additional_episodes`).
+
+    Fresh training writes an initial checkpoint before any traffic. Resume validates the explicitly
+    selected checkpoint (format, integrity, compatibility including horizon) before any traffic and
+    continues in the same training folder. Each attempt gets the next persistent attempt index, which
+    selects its traffic seed and run ID. Training stops at the first incomplete attempt or failed save.
+    After each milestone episode, an immutable copy is evaluated frozen on the development seeds.
+    """
+    from traffic_cps.checkpoints import (
+        CheckpointStore,
+        CheckpointWriteError,
+        Progress,
+        compatibility,
+        file_sha256,
+        learner_from_checkpoint,
+        progress_from_checkpoint,
+    )
+    from traffic_cps.controllers.q_learning import QLearningController
+    from traffic_cps.scenario import create_scenario, profile_for_index, read_network_manifest
+
+    horizon = config.simulation.horizon_s if horizon_s is None else horizon_s
+    compat = compatibility(config, read_network_manifest(config.network.directory), horizon)
+    say = notify or (lambda message: None)
+
+    if resume is None:
+        if isinstance(episodes, bool) or not isinstance(episodes, int) or episodes <= 0:
+            raise ValueError(f"episodes must be a positive integer, got {episodes!r}")
+        training_dir = Path(output_dir)
+        training_dir.mkdir(parents=True, exist_ok=False)  # explicit fresh training: a new folder
+        store = CheckpointStore(training_dir / "checkpoints")
+        learner = Learner(config)
+        session = TrainingSession(config, training_dir.name, learner, Progress(0, 0, 0), compat, store)
+        ev.write_json_exclusive(training_dir / TRAINING_MANIFEST, {
+            "training_id": training_dir.name, "created_at_utc": _utc_now(), "horizon_s": horizon,
+            "config_sha256": config_digest(config), "compatibility": compat,
+            "controller_seed": config.learning.controller_seed,
+            "rng": "python random.Random (MT19937)",
+        })
+        result = TrainingResult(training_dir, learner, target_completed=episodes)
+        try:
+            session.save("initial", None, None)          # before any traffic
+        except CheckpointWriteError as exc:
+            result.persistence_failure = f"initial checkpoint failed: {exc}"
+            return result
+        source = {"kind": "fresh", "initial_checkpoint": session.last_checkpoint_id}
+    else:
+        if isinstance(additional_episodes, bool) or not isinstance(additional_episodes, int) \
+                or additional_episodes <= 0:
+            raise ValueError(f"additional episodes must be a positive integer, got {additional_episodes!r}")
+        resume = Path(resume)
+        training_dir = _training_dir_of(resume)
+        store = CheckpointStore(training_dir / "checkpoints")
+        data = store.load(resume, compat, "resume")
+        if data["training_id"] != training_dir.name:
+            raise CheckpointError(f"checkpoint belongs to training {data['training_id']!r}, "
+                                  f"not folder {training_dir.name!r}")
+        learner = learner_from_checkpoint(config, data)
+        progress = progress_from_checkpoint(data)
+        # Section B: the next attempt index exceeds both the checkpoint allocation and every attempt
+        # allocated in a run manifest (failed runs included), so an explicitly selected older
+        # checkpoint rolls back learning but never reuses a run identity or traffic seed.
+        allocated = _allocated_attempts(training_dir)
+        if allocated > progress.episode_attempts:
+            say(f"run manifests in {training_dir.name} record {allocated} allocated attempts; the checkpoint "
+                f"records {progress.episode_attempts}; continuing from attempt {allocated + 1}")
+            progress = replace(progress, episode_attempts=allocated)
+        session = TrainingSession(config, training_dir.name, learner, progress, compat, store)
+        session.last_checkpoint_id = data["checkpoint_id"]
+        result = TrainingResult(training_dir, learner, target_completed=progress.completed_episodes
+                                + additional_episodes, completed_episodes=progress.completed_episodes)
+        source = {"kind": "resumed", "checkpoint_path": str(resume), "checkpoint_id": data["checkpoint_id"],
+                  "checkpoint_file_sha256": file_sha256(resume), "integrity_sha256": data["integrity_sha256"]}
+
+    held_out = set(config.experiment.development_seeds) | set(config.experiment.final_seeds)
+    while session.progress.completed_episodes < result.target_completed:
+        if stop is not None and stop.requested:
+            result.stopped = stop.reason
+            break
+        attempt = session.begin_attempt()
+        seed = config.experiment.training_seed_start + attempt
+        if seed in held_out:
+            raise ValueError(f"training seed {seed} is a development or final seed")
+        profile = profile_for_index(attempt)
+        scenario = training_dir / "scenarios" / f"seed_{seed:03d}"
+        create_scenario(config.network.directory, scenario, seed, profile, horizon)
+        runtime = Runtime(config, scenario, QLearningController(learner), training_dir, horizon_s=horizon,
+                          mode=Mode.TRAIN, notify=notify, learner=learner, session=session, stop=stop,
+                          connection_wrapper=connection_wrapper,
+                          run_id=f"train-attempt{attempt + 1:03d}-seed{seed:03d}",
+                          provenance={"training_id": training_dir.name, "episode_attempt_index": attempt,
+                                      "traffic_seed": seed, "profile": profile.value, "learning_source": source})
+        run = runtime.run()
+        result.episodes.append(run)
+        result.completed_episodes = session.progress.completed_episodes
+        if on_episode is not None:
+            on_episode(run)
+        source = {"kind": "continued_in_memory", "previous_run": run.run_id,
+                  "last_checkpoint": session.last_checkpoint_id}
+        if run.completion is not CompletionStatus.COMPLETED or run.checkpoint_status != "saved" \
+                or not run.persistence_ok:
+            if stop is not None and stop.requested:
+                result.stopped = stop.reason
+            if run.checkpoint_status != "saved":
+                result.persistence_failure = run.failure
+            break
+        n = session.progress.completed_episodes
+        if n in config.experiment.development_after_episodes:
+            try:
+                milestone = store.write_milestone(training_dir / "milestones", n)
+            except CheckpointWriteError as exc:
+                result.persistence_failure = str(exc)
+                say(f"milestone write failed: {exc}")
+                break
+            result.development += evaluate_milestone(config, milestone, training_dir, horizon, n,
+                                                     notify=notify, stop=stop)
+    return result
+
+
+def evaluate_milestone(config: Config, milestone: Path, training_dir: Path, horizon_s: int, episode: int,
+                       notify: Callable[[str], None] | None = None, stop: StopRequest | None = None) -> list[dict]:
+    """Frozen evaluation of an immutable milestone copy on each development seed.
+
+    Each seed loads its own Learner from the file (own table copy and RNG), so evaluation cannot
+    touch training state. Failures are recorded and reported, never raised: training continues.
+    """
+    from traffic_cps.checkpoints import CheckpointStore, compatibility, file_sha256, learner_from_checkpoint
     from traffic_cps.controllers.q_learning import QLearningController
     from traffic_cps.scenario import create_scenario, profile_for_index
 
-    if isinstance(episodes, bool) or not isinstance(episodes, int) or episodes <= 0:
-        raise ValueError(f"episodes must be a positive integer, got {episodes!r}")
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=False)  # never overwrite an earlier training output
-    horizon = config.simulation.horizon_s if horizon_s is None else horizon_s
-    held_out = set(config.experiment.development_seeds) | set(config.experiment.final_seeds)
-    learner = learner or Learner(config)
-    results: list[RunResult] = []
-    for index in range(episodes):
-        seed = config.experiment.training_seed_start + index
-        if seed in held_out:
-            raise ValueError(f"training seed {seed} is a development or final seed")
-        scenario = output_dir / "scenarios" / f"seed_{seed:03d}"
-        create_scenario(config.network.directory, scenario, seed, profile_for_index(index), horizon)
-        runtime = Runtime(config, scenario, QLearningController(learner), output_dir, horizon_s=horizon,
-                          mode=Mode.TRAIN, notify=notify, learner=learner,
-                          run_id=f"train-ep{index + 1:03d}-seed{seed:03d}")
-        result = runtime.run()
-        results.append(result)
-        if on_episode is not None:
-            on_episode(index + 1, result)
-        if result.completion is not CompletionStatus.COMPLETED or not result.persistence_ok:
-            break
-    return learner, results
+    records = []
+    for index, seed in enumerate(config.experiment.development_seeds):
+        record = {"episode": episode, "seed": seed, "ok": False, "run_id": None, "failure": None}
+        try:
+            scenario = training_dir / "scenarios" / f"dev_seed_{seed:03d}"
+            if not (scenario / SCENARIO_MANIFEST).is_file():
+                create_scenario(config.network.directory, scenario, seed, profile_for_index(index), horizon_s)
+            with open(scenario / SCENARIO_MANIFEST, encoding="utf-8") as fh:
+                network = json.load(fh)["network"]
+            data = CheckpointStore(milestone.parent).load(milestone, compatibility(config, network, horizon_s),
+                                                          "evaluate")
+            learner = learner_from_checkpoint(config, data)
+            run = Runtime(config, scenario, QLearningController(learner),
+                          training_dir / "development" / f"episode_{episode:03d}", horizon_s=horizon_s,
+                          mode=Mode.EVALUATE, notify=notify, learner=learner, stop=stop,
+                          run_id=f"dev-ep{episode:03d}-seed{seed:03d}",
+                          provenance={"purpose": "development_evaluation", "traffic_seed": seed,
+                                      "checkpoint_path": str(milestone), "checkpoint_id": data["checkpoint_id"],
+                                      "checkpoint_file_sha256": file_sha256(milestone)}).run()
+            record["run_id"] = run.run_id
+            record["ok"] = run.completion is CompletionStatus.COMPLETED and run.persistence_ok
+            record["failure"] = run.failure
+        except Exception as exc:  # reported separately; training state is untouched either way
+            record["failure"] = f"{type(exc).__name__}: {exc}"
+        if not record["ok"] and notify is not None:
+            notify(f"development evaluation episode {episode} seed {seed} failed: {record['failure']}")
+        records.append(record)
+    return records

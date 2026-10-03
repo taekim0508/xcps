@@ -396,6 +396,10 @@ class RunResult:
     final_valid_time_s: int | None
     failure: str | None
     counters: Mapping[str, int]
+    # Training checkpoint outcome for this run, separate from simulation completion and log persistence:
+    # None (no checkpointing), "saved", "failed", or "unconfirmed".
+    checkpoint_status: str | None = None
+    last_checkpoint_id: str | None = None
 
     def __post_init__(self) -> None:
         _frozen_mapping(self, "counters")

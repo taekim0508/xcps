@@ -223,7 +223,7 @@ def test_contract_I_train_two_short_episodes_exits_0_and_learns(trained):
     code, out = trained
     assert code == 0
     runs = sorted((out / "runs").iterdir())
-    assert [r.name for r in runs] == ["train-ep001-seed000", "train-ep002-seed001"]
+    assert [r.name for r in runs] == ["train-attempt001-seed000", "train-attempt002-seed001"]
     for run_dir in runs:
         events = events_of(run_dir)
         assert events[-1]["payload"]["completion"] == "completed"
@@ -282,8 +282,9 @@ def test_contract_I_train_refuses_existing_output(trained, capsys):
 
 
 def test_module2B_frozen_evaluation_leaves_table_rng_and_progress_unchanged(network_dir, tmp_path):
-    learner, results = train(CONFIG, 1, tmp_path / "training", horizon_s=300)
-    assert results[0].completion is CompletionStatus.COMPLETED and learner.table.revision > 0
+    outcome = train(CONFIG, 1, tmp_path / "training", horizon_s=300)
+    learner = outcome.learner
+    assert outcome.episodes[0].completion is CompletionStatus.COMPLETED and learner.table.revision > 0
     table_before, rng_before = learner.table.to_json(), learner.rng.getstate()
     schedule_before = learner.schedule.to_json()
 

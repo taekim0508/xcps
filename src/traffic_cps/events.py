@@ -97,6 +97,7 @@ class EventWriter:
         self.run_id = run_id
         self.seq = 0
         self._ids: set[str] = set()
+        self.failed: str | None = None  # once a write or flush fails, the log is never written again
         try:
             self._fh = open(self.path, "x", encoding="utf-8")
         except FileExistsError as exc:
@@ -105,6 +106,8 @@ class EventWriter:
     def append(self, event_type: str, sim_time_s: int, payload: Mapping[str, Any],
                event_id: str | None = None) -> str:
         """Serialize fully before writing, so a failure never leaves a partial line."""
+        if self.failed:
+            raise EventError(f"event log already failed ({self.failed}); not writing {event_type}")
         if event_type not in EVENT_TYPES:
             raise EventError(f"unknown event type {event_type!r}")
         if isinstance(sim_time_s, bool) or not isinstance(sim_time_s, int):
@@ -122,19 +125,40 @@ class EventWriter:
             "type": event_type,
             "payload": to_jsonable(payload),
         })
-        self._fh.write(line + "\n")
+        try:
+            self._fh.write(line + "\n")
+        except Exception as exc:  # may have partially succeeded: never retried
+            self.failed = f"write of {event_type} at t={sim_time_s} failed: {exc}"
+            raise EventError(self.failed) from exc
         self.seq = seq
         self._ids.add(event_id)
         return event_id
 
     def flush(self) -> None:
-        self._fh.flush()
+        if self.failed:
+            raise EventError(f"event log already failed ({self.failed})")
+        try:
+            self._fh.flush()
+        except Exception as exc:
+            self.failed = f"flush failed: {exc}"
+            raise EventError(self.failed) from exc
 
     def close(self) -> None:
-        if not self._fh.closed:
+        if self._fh.closed:
+            return
+        if self.failed:  # release the handle without another write attempt
+            try:
+                self._fh.close()
+            except Exception:
+                pass
+            raise EventError(f"event log failed earlier ({self.failed}); closed without a final flush")
+        try:
             self._fh.flush()
             os.fsync(self._fh.fileno())
             self._fh.close()
+        except Exception as exc:
+            self.failed = f"close failed: {exc}"
+            raise EventError(self.failed) from exc
 
 
 # ----------------------------------------------------------------------
@@ -220,6 +244,20 @@ def learning_update_payload(u: LearningUpdate) -> dict:
         "update_count_before": u.update_count_before,
         "update_count_after": u.update_count_after,
         "policy_revision": u.policy_revision,
+    }
+
+
+def checkpoint_saved_payload(result, reason: str, progress: dict) -> dict:
+    return {
+        "reason": reason,
+        "status": result.status,
+        "path": result.path,
+        "checkpoint_id": result.checkpoint_id,
+        "save_generation": result.generation,
+        "integrity_sha256": result.integrity_sha256,
+        "file_sha256": result.file_sha256,
+        "durability": result.durability,
+        "progress": progress,
     }
 
 
