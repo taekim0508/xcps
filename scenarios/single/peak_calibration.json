@@ -1,0 +1,18 @@
+{
+  "both_scores_at_cap": 0,
+  "check": "peak_saturation",
+  "checked_at_utc": "2026-10-03T01:26:24+00:00",
+  "fraction": 0.0,
+  "free_choice_checks_in_window": 126,
+  "generator_version": "demand_v1",
+  "horizon_s": 3600,
+  "max_fraction": 0.25,
+  "passed": true,
+  "peak_probability_per_direction": 0.45,
+  "peak_window_s": [
+    1200,
+    2400
+  ],
+  "run_id": "queue-20261003T012622Z-a306d8",
+  "traffic_seed": 2
+}

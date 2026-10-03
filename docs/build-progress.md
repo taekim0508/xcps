@@ -2,7 +2,7 @@
 
 Tracks the 8 development chunks and the current position. Chunks follow the design doc's "Implementation order" (steps 0 to 7) exactly. The design doc remains the specification; this file only records status and decisions.
 
-**Current chunk:** 1 (awaiting review)
+**Current chunk:** 2 (awaiting review)
 
 Status values: `not started`, `in progress`, `awaiting review`, `done`.
 
@@ -11,8 +11,8 @@ Status values: `not started`, `in progress`, `awaiting review`, `done`.
 | # | Chunk | Status | Gate |
 |---|---|---|---|
 | 0 | Foundation: scaffold, environment, scenario | done | `doctor` passes on 1.24.0; `scenario build` produces a validated network |
-| 1 | Simulator interface and safety | awaiting review | Real SUMO steps under the monitor with zero violations; fault-injection cases pass |
-| 2 | Thin vertical slice | not started | `run` -> `explain` -> `report.html` on one short run; peak saturation check recorded |
+| 1 | Simulator interface and safety | done | Real SUMO steps under the monitor with zero violations; fault-injection cases pass |
+| 2 | Thin vertical slice | awaiting review | `run` -> `explain` -> `report.html` on one short run; peak saturation check recorded |
 | 3 | Fixed-time and full runtime enforcement | not started | Full-horizon fixed and queue runs with correct attribution |
 | 4 | Tabular Q-learning | not started | Short training learns; frozen evaluation leaves the table unchanged |
 | 5 | Persistence and failure-safe shutdown | not started | Train -> interrupt -> resume -> evaluate cycle works |
@@ -50,6 +50,12 @@ Status values: `not started`, `in progress`, `awaiting review`, `done`.
 - Files: `controllers/__init__.py`, `controllers/queue.py`, `actuator.py`, `runtime.py` (minimal), `events.py` (minimal), `explain.py` (minimal), `report.py` (timeline), `cli.py` (`run`, `explain`, `report`)
 - Tests: queue rule with `1e-9` tolerance and current-green tie wins; actuator accepted/blocked; 10s -> 12s -> 20s timeline; 60s smoke run end to end
 - Then: peak saturation check; regenerate demand and record in manifest if > 25%
+- Approved choices (2026-10-02): runtime already includes the step-5 forced switch and per-second S4 check (needed for an honest saturation check); saturation check is a CLI subcommand `scenario saturation-check` (addition to Section I) so its result is recorded; explainer/report cover only queue decisions, holds, forced switches, and safety events for now.
+
+- Result (2026-10-03): 167 unit + 34 integration tests pass. CLI smoke path (`run` -> `explain` -> `report`) exits 0 on `scenarios/smoke`.
+- Peak saturation check (seed 2, H=3600): PASS, 0/126 free choices in the peak window had both scores at cap; recorded in `scenarios/single/peak_calibration.json`. No demand change needed.
+- Finding for chunk 4: peak queues stay far below capacity under the queue rule (max 20 waiting on N/S, max direction score 0.61 of 2.0; it switches about every 10 s). If this holds for Q-learning, only the two lowest queue bins ([0, 0.4), [0.4, 0.8)) will be visited. Not a spec violation; flag when planning chunk 4.
+- Not yet: `scenarios/smoke` was generated before calibration, so its manifest has an empty `calibration` list (scenarios generated from now on include it). Fixed-time controller, failure-path tests, and the full Module 5 checklist are chunk 3.
 
 ### 3. Fixed-time and full runtime enforcement
 - Files: `controllers/fixed.py`, `runtime.py` (full Section E ordering), `cli.py`
@@ -93,3 +99,5 @@ Status values: `not started`, `in progress`, `awaiting review`, `done`.
 - 2026-10-02: Repo created and initial docs pushed. Native macOS failed (library versions); switched to Linux container. Chunk 0 implemented and tests passing; awaiting review.
 - 2026-10-02: Chunk 0 approved (network content hash, config rules). Chunk 1 plan approved; started.
 - 2026-10-02: Chunk 1 implemented; all tests pass; awaiting review.
+- 2026-10-02: Chunk 1 approved (committed by Tae). Chunk 2 plan approved; started.
+- 2026-10-03: Chunk 2 implemented; all tests pass; saturation check passed; awaiting review.

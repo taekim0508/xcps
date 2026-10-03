@@ -16,6 +16,7 @@ from pathlib import Path
 
 from traffic_cps import PYTHON_MAJOR_MINOR, SUMO_VERSION
 from traffic_cps.config import ConfigError, load_config
+from traffic_cps.contracts import CompletionStatus
 from traffic_cps.scenario import (
     DemandProfile,
     ScenarioError,
@@ -136,6 +137,97 @@ def cmd_scenario_demand(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def cmd_saturation_check(args: argparse.Namespace) -> int:
+    from traffic_cps.experiments import ExperimentError, saturation_check
+
+    try:
+        config = load_config(args.config)
+    except ConfigError as exc:
+        print(f"config: FAIL {exc}", file=sys.stderr)
+        return EXIT_INVALID
+    try:
+        record = saturation_check(config, args.network, args.seed, args.output, horizon_s=args.horizon)
+    except (ExperimentError, ScenarioError) as exc:
+        print(f"saturation check: FAIL {exc}", file=sys.stderr)
+        return EXIT_FAILURE
+    verdict = "PASS" if record["passed"] else "FAIL (lower peak demand, record the change, regenerate)"
+    print(f"saturation check: {verdict}: {record['both_scores_at_cap']}/{record['free_choice_checks_in_window']} "
+          f"free-choice checks in the peak window had both scores at cap "
+          f"({record['fraction']:.1%}; limit {record['max_fraction']:.0%}); run {record['run_id']}")
+    return EXIT_OK if record["passed"] else EXIT_FAILURE
+
+
+# --------------------------------------------------------------------------
+# run / explain / report
+# --------------------------------------------------------------------------
+
+CONTROLLERS = ("queue",)
+
+
+def _make_controller(name: str):
+    from traffic_cps.controllers.queue import QueueController
+
+    return {"queue": QueueController}[name]()
+
+
+def cmd_run(args: argparse.Namespace) -> int:
+    from traffic_cps.report import build_report
+    from traffic_cps.runtime import Runtime
+
+    try:
+        config = load_config(args.config)
+    except ConfigError as exc:
+        print(f"config: FAIL {exc}", file=sys.stderr)
+        return EXIT_INVALID
+
+    def notify(message: str) -> None:
+        print(f"warning: {message}", file=sys.stderr)
+
+    try:
+        runtime = Runtime(config, args.scenario, _make_controller(args.controller), args.output,
+                          horizon_s=args.horizon, notify=notify)
+        result = runtime.run()
+    except Exception as exc:  # setup failures before the run loop (e.g. output exists)
+        print(f"run: FAIL {type(exc).__name__}: {exc}", file=sys.stderr)
+        return EXIT_INVALID
+    print(f"run {result.run_id}: {result.completion.value} (final valid time {result.final_valid_time_s}s "
+          f"of {result.planned_horizon_s}s); log persisted: {result.persistence_ok}")
+    print(f"run directory: {result.run_dir}")
+    if result.failure:
+        print(f"failure: {result.failure}", file=sys.stderr)
+    report_ok = True
+    try:
+        print(f"report: {build_report(result.run_dir)}")
+    except Exception as exc:
+        report_ok = False
+        print(f"report: FAIL {type(exc).__name__}: {exc}", file=sys.stderr)
+    ok = result.completion is CompletionStatus.COMPLETED and result.persistence_ok and report_ok
+    return EXIT_OK if ok else EXIT_FAILURE
+
+
+def cmd_explain(args: argparse.Namespace) -> int:
+    from traffic_cps.explain import ExplainError, explain, render_text
+
+    try:
+        print(render_text(explain(args.run, args.decision)))
+    except ExplainError as exc:
+        print(f"explain: FAIL {exc}", file=sys.stderr)
+        return EXIT_INVALID
+    return EXIT_OK
+
+
+def cmd_report(args: argparse.Namespace) -> int:
+    from traffic_cps.explain import ExplainError
+    from traffic_cps.report import build_report
+
+    try:
+        print(f"report: {build_report(args.run)}")
+    except ExplainError as exc:
+        print(f"report: FAIL {exc}", file=sys.stderr)
+        return EXIT_INVALID
+    return EXIT_OK
+
+
 # --------------------------------------------------------------------------
 # entry point
 # --------------------------------------------------------------------------
@@ -165,6 +257,31 @@ def build_parser() -> argparse.ArgumentParser:
     demand.add_argument("--horizon", type=int, required=True)
     demand.add_argument("--output", type=Path, required=True)
     demand.set_defaults(func=cmd_scenario_demand)
+
+    sat = scenario_sub.add_parser("saturation-check", help="peak saturation check with the queue controller")
+    sat.add_argument("--config", type=Path, required=True)
+    sat.add_argument("--network", type=Path, required=True)
+    sat.add_argument("--seed", type=int, required=True)
+    sat.add_argument("--output", type=Path, required=True)
+    sat.add_argument("--horizon", type=int, help="override the configured horizon")
+    sat.set_defaults(func=cmd_saturation_check)
+
+    run = sub.add_parser("run", help="run one baseline controller on a scenario")
+    run.add_argument("--config", type=Path, required=True)
+    run.add_argument("--controller", choices=CONTROLLERS, required=True)
+    run.add_argument("--scenario", type=Path, required=True)
+    run.add_argument("--horizon", type=int, help="override the configured horizon (must match the scenario)")
+    run.add_argument("--output", type=Path, required=True)
+    run.set_defaults(func=cmd_run)
+
+    exp = sub.add_parser("explain", help="explain one recorded decision or event")
+    exp.add_argument("--run", type=Path, required=True)
+    exp.add_argument("--decision", required=True, help="event ID")
+    exp.set_defaults(func=cmd_explain)
+
+    rep = sub.add_parser("report", help="write report.html for a finished run (never launches SUMO)")
+    rep.add_argument("--run", type=Path, required=True)
+    rep.set_defaults(func=cmd_report)
     return parser
 
 

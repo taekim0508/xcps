@@ -226,3 +226,86 @@ class SubmissionResult:
     signal_event: SignalEvent | None = None
     override: SafetyOverride | None = None
     violations: tuple[SafetyViolation, ...] = ()
+
+
+# ----------------------------------------------------------------------
+# Decisions (chunk 2)
+# ----------------------------------------------------------------------
+
+class DecisionSource(str, Enum):
+    """What produced a controller decision. Operating rules and safety are never decisions."""
+
+    QUEUE_RULE = "queue_rule"
+    TEST_SCRIPT = "test_script"  # scripted decisions used only by tests
+
+
+class DecisionReason(str, Enum):
+    HIGHER_QUEUE_SCORE = "higher_queue_score"
+    EQUAL_QUEUE_SCORES = "equal_queue_scores"
+    SERVICE_LIMIT_COMPETING_DEMAND = "service_limit_competing_demand"
+    SCRIPTED = "scripted"
+
+
+class HoldReason(str, Enum):
+    """Why a scheduled control point produced no controller choice."""
+
+    MINIMUM_GREEN_NOT_REACHED = "minimum_green_not_reached"
+    TRANSITION_IN_PROGRESS = "transition_in_progress"
+
+
+@dataclass(frozen=True)
+class DecisionContext:
+    observation: Observation
+    allowed: tuple[Direction, ...]
+    mode: Mode
+    minimum_green_s: int
+    green_service_limit_s: int
+    tie_abs_tolerance: float
+    score_cap: float
+
+
+@dataclass(frozen=True)
+class Decision:
+    decision_id: str
+    observation_id: str
+    time: int
+    requested: Direction
+    current_green: Direction
+    source: DecisionSource
+    reason: DecisionReason
+    scores: Mapping[Direction, float]
+    counts: Mapping[Direction, int]
+    tie: bool
+    both_at_cap: bool
+    elapsed_green_s: int
+    green_service_limit_s: int
+    epsilon: float | None
+    policy_revision: int | None
+
+    def __post_init__(self) -> None:
+        _frozen_mapping(self, "scores", "counts")
+
+    @property
+    def retains(self) -> bool:
+        return self.requested is self.current_green
+
+
+class CompletionStatus(str, Enum):
+    COMPLETED = "completed"
+    INCOMPLETE = "incomplete"
+
+
+@dataclass(frozen=True)
+class RunResult:
+    run_id: str
+    run_dir: str
+    completion: CompletionStatus
+    trace_complete: bool
+    persistence_ok: bool
+    planned_horizon_s: int
+    final_valid_time_s: int | None
+    failure: str | None
+    counters: Mapping[str, int]
+
+    def __post_init__(self) -> None:
+        _frozen_mapping(self, "counters")

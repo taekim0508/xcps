@@ -37,6 +37,7 @@ NETWORK_MANIFEST = "network.manifest.json"
 ROUTES_FILE = "demand.rou.xml"
 DEMAND_MANIFEST = "demand.manifest.json"
 SCENARIO_MANIFEST = "scenario.manifest.json"
+PEAK_CALIBRATION_FILE = "peak_calibration.json"
 
 # Vehicle type `car` (Section B). Unspecified dynamics keep pinned SUMO defaults.
 VEHICLE_TYPE = (
@@ -332,10 +333,21 @@ def create_scenario(network_dir: Path | str, out_dir: Path | str, seed: int,
             ROUTES_FILE: sha256_file(out_dir / ROUTES_FILE),
             DEMAND_MANIFEST: sha256_file(out_dir / DEMAND_MANIFEST),
         },
-        "calibration": [],  # peak saturation check results and any probability changes (chunk 2)
+        # Peak saturation check result (and any probability change) recorded for this network.
+        "calibration": _read_calibration(network_dir),
     }
     _write_json(out_dir / SCENARIO_MANIFEST, manifest)
     return manifest
+
+
+def _read_calibration(network_dir: Path) -> list[dict]:
+    path = network_dir / PEAK_CALIBRATION_FILE
+    if not path.exists():
+        return []
+    try:
+        return [json.loads(path.read_text(encoding="utf-8"))]
+    except ValueError as exc:
+        raise ScenarioError(f"unreadable calibration record {path}: {exc}") from exc
 
 
 def _read_network_manifest(network_dir: Path) -> dict:
