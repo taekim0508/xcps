@@ -158,10 +158,20 @@ class Observation:
     transition_start_s: int | None
     raw_signal: str
     measurement: MeasurementQuality
+    # Truth versus measurement (Section H). counts_* and scores above are what the controller,
+    # reward, and S4 use; true_* are the simulator's counts and feed congestion metrics. In clean
+    # runs they are equal and fault_label is "clean".
+    true_counts_by_lane: Mapping[str, int] | None = None
+    true_counts_by_direction: Mapping[Direction, int] | None = None
+    fault_label: str = "clean"
+    departed_ids: tuple[str, ...] = ()   # vehicles inserted during this second (accounting)
+    arrived_ids: tuple[str, ...] = ()    # vehicles that left the network during this second
 
     def __post_init__(self) -> None:
         _frozen_mapping(self, "counts_by_lane", "counts_by_direction", "lane_scores", "scores",
                         "colors", "color_since_s")
+        if self.true_counts_by_lane is not None:
+            _frozen_mapping(self, "true_counts_by_lane", "true_counts_by_direction")
 
 
 @dataclass(frozen=True)

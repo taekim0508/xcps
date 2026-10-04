@@ -2,7 +2,7 @@
 
 Tracks the 8 development chunks and the current position. Chunks follow the design doc's "Implementation order" (steps 0 to 7) exactly. The design doc remains the specification; this file only records status and decisions.
 
-**Current chunk:** 6 (awaiting review)
+**Current chunk:** 7 (7a awaiting review; 7b not started)
 
 Status values: `not started`, `in progress`, `awaiting review`, `done`.
 
@@ -16,8 +16,8 @@ Status values: `not started`, `in progress`, `awaiting review`, `done`.
 | 3 | Fixed-time and full runtime enforcement | done | Full-horizon fixed and queue runs with correct attribution |
 | 4 | Tabular Q-learning | done | Short training learns; frozen evaluation leaves the table unchanged |
 | 5 | Persistence and failure-safe shutdown | done | Train -> interrupt -> resume -> evaluate cycle works |
-| 6 | Full explanation layer | awaiting review | Fidelity checks pass on all three controllers |
-| 7 | Experiments and results | not started | 7a: code and tests pass. 7b: tuning, training, comparison, robustness runs, honest results summary |
+| 6 | Full explanation layer | done | Fidelity checks pass on all three controllers |
+| 7 | Experiments and results | in progress | 7a: code and tests pass. 7b: tuning, training, comparison, robustness runs, honest results summary |
 
 ## Chunk details
 
@@ -101,7 +101,12 @@ Status values: `not started`, `in progress`, `awaiting review`, `done`.
 
 ### 7. Experiments and results
 - Files: `experiments.py`, `faults.py` (noise wrapper), `cli.py` (`tune-fixed`, `evaluate`), vehicle accounting
+- Approved choices (2026-10-04): masked demand logged once per second it holds (summary also counts separate stretches); phantom demand once per forced switch; results write-up in `docs/results.md` (committed, every number cites its run or experiment ID); each lane draws exactly two uniforms per second (stale test, then noise = floor(u * (2b + 1)) - b), never `randint`; final and robustness suites use the episode-15 milestone.
 - Tests: identical draw sequences across fault levels; phantom/masked detection on injected cases; tuning never reads final seeds; every vehicle classified exactly once
+
+- Result 7a (2026-10-04): 323 unit + 126 integration tests pass in the container. Reduced-suite integration run (H=300, development seeds 100-101, final seeds 200-201, candidates 20/30 s): tuning, 2-episode training, final comparison and robustness suites all complete; every vehicle classified exactly once in every final run; every generated explanation passed the fidelity sweep (0 mismatches, 0 unavailable); clean runs report zero phantom/masked demand.
+- Phantom/masked demand did not occur in the short reduced runs; detection is verified on injected known cases (unit) and the explanation wording on synthetic logs. Whether they occur at full horizon is a 7b result.
+- 7b plan: `tune-fixed` (9 candidates x 3 development seeds), `train` 15 episodes with milestones 5/10/15 and development evaluations, `evaluate --suite final` and `--suite robustness` with `milestones/episode_015.json`, then `docs/results.md`.
 
 ## Decisions
 
@@ -140,3 +145,6 @@ Status values: `not started`, `in progress`, `awaiting review`, `done`.
 - 2026-10-03: Chunk 5 approved (committed by Tae, 0a3e37e). Chunk 6 planning started.
 - 2026-10-03: Chunk 6 plan approved (all recommended options); started.
 - 2026-10-04: Chunk 6 implemented; all tests pass; report reviewed visually; awaiting review.
+- 2026-10-04: Chunk 6 approved (committed by Tae, 94b0a6b). Chunk 7 planning started.
+- 2026-10-04: Chunk 7 plan approved (all recommended options); 7a started.
+- 2026-10-04: 7a implemented; all tests pass; awaiting review before 7b runs.

@@ -163,6 +163,17 @@ def pair(a: float, b: float) -> tuple[str, str]:
     return repr(a), repr(b)
 
 
+def _seen_versus_true(trace: RunTrace, observation_id: str | None) -> str | None:
+    """Robustness runs only: what the controller saw versus the simulator's truth (Section H)."""
+    o = trace.by_id.get(observation_id) if observation_id else None
+    if o is None or o["payload"].get("fault_label", "clean") == "clean":
+        return None
+    p = o["payload"]
+    seen, true = p["counts_by_direction"], p["true_counts_by_direction"]
+    return (f"Sensor fault experiment ({p['fault_label']}): the controller saw N/S {seen['NS']} and W/E "
+            f"{seen['WE']} waiting; the simulator's true counts were N/S {true['NS']} and W/E {true['WE']}.")
+
+
 def _situation(t: int, counts: dict, scores: dict) -> str:
     ns, we = pair(scores["NS"], scores["WE"])
     return (f"At {t}s, N/S had {counts['NS']} waiting vehicles (queue score {ns}) "
@@ -557,6 +568,9 @@ def _decision(trace: RunTrace, e: dict) -> tuple[str, dict, list, str | None, st
         if problem:
             limitations.append(f"fidelity check failed: {problem}")
 
+    seen = _seen_versus_true(trace, p["observation_id"])
+    if seen:
+        parts.insert(1, seen)
     exec_text, exec_facts, exec_limits = _execution(trace, e["event_id"], req, cur)
     if exec_text:
         parts.append(exec_text)
@@ -605,7 +619,8 @@ def _operating_action(trace: RunTrace, e: dict):
     exec_text, exec_facts, limitations = _execution(trace, e["event_id"], req, green)
     facts = {"reason": p["reason"], "counts": p["counts"], "scores": p["scores"],
              "elapsed_green_s": p["elapsed_green_s"], "execution": exec_facts}
-    return (" ".join(x for x in (text, exec_text) if x), facts, limitations,
+    seen = _seen_versus_true(trace, p.get("observation_id"))
+    return (" ".join(x for x in (text, seen, exec_text) if x), facts, limitations,
             "Not applicable: an operating rule, not a controller choice.", None)
 
 
@@ -631,7 +646,26 @@ def _safety(trace: RunTrace, e: dict):
             f"The run stopped.", dict(p), [], contrast, None)
 
 
+def _demand_fault(trace: RunTrace, e: dict):
+    p, t = e["payload"], e["sim_time_s"]
+    green, other = name(p["green"]), name(p["competing"])
+    if p["kind"] == "phantom_demand":
+        text = (f"At {t}s, the service limit forced a switch to {other} because the sensor reported "
+                f"{p['measured_competing_count']} waiting on {other}; the simulator's true count was "
+                f"{p['true_competing_count']} (phantom demand, fault level {p['fault_label']}).")
+    else:
+        text = (f"At {t}s, {green} had been green for {p['elapsed_green_s']}s (limit {p['green_service_limit_s']}s) "
+                f"and {p['true_competing_count']} vehicles were truly waiting on {other}, but the sensor reported "
+                f"{p['measured_competing_count']}, so no switch was forced (masked demand, fault level "
+                f"{p['fault_label']}).")
+    text += (" This is an evaluation diagnostic, not a safety violation: the S4 check uses measured demand by "
+             "design, so it cannot see this error.")
+    return text, dict(p), [], "Not applicable: a sensing-error diagnostic, not a controller choice.", None
+
+
 _HANDLERS = {
+    "phantom_demand": _demand_fault,
+    "masked_demand": _demand_fault,
     "decision": _decision,
     "operating_action": _operating_action,
     "constraint_hold": _constraint_hold,

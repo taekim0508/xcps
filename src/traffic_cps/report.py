@@ -32,7 +32,8 @@ PLOT_W, LEFT, RIGHT = 940, 50, 10
 QUEUE_H, BAND_H, MARK_H = 170, 16, 26
 SERIES = {"NS": "var(--ns)", "WE": "var(--we)"}
 LIGHT = {"green": "var(--green)", "yellow": "var(--yellow)", "red": "var(--red)"}
-EXPLAINED = ("decision", "operating_action", "safety_override", "safety_violation")
+EXPLAINED = ("decision", "operating_action", "safety_override", "safety_violation", "phantom_demand",
+             "masked_demand")
 SOURCES = {  # marker color and legend label per decision source
     "queue_rule": ("var(--s-queue)", "queue rule"),
     "fixed_schedule": ("var(--s-fixed)", "fixed schedule"),
@@ -90,8 +91,13 @@ def summarize(trace: RunTrace) -> dict:
     completion = end_p.get("completion", "unknown (no run_end record)")
 
     samples = [e for e in events if e["type"] == "observation" and e["sim_time_s"] >= 1]
-    totals = [sum(e["payload"]["counts_by_direction"].values()) for e in samples]
-    by_dir = {d: sum(e["payload"]["counts_by_direction"][d] for e in samples) for d in ("NS", "WE")}
+    # Congestion metrics use the simulator's true counts (Section H); logs without a separate truth
+    # field come from clean runs, where measured equals true.
+    has_truth = bool(samples) and all(e["payload"].get("true_counts_by_direction") for e in samples)
+    key = "true_counts_by_direction" if has_truth else "counts_by_direction"
+    totals = [sum(e["payload"][key].values()) for e in samples]
+    by_dir = {d: sum(e["payload"][key][d] for e in samples) for d in ("NS", "WE")}
+    accounting = end_p.get("vehicle_accounting")
     n = len(samples)
     partial = completion != "completed" or n != horizon
     metrics = {
@@ -101,8 +107,24 @@ def summarize(trace: RunTrace) -> dict:
         "mean_queued_by_direction": {d: (v / n) if n else None for d, v in by_dir.items()},
         "peak_queued_vehicles": max(totals) if totals else None,
         "queue_exposure_vehicle_seconds": sum(totals),
-        "completed_vehicles": "not_recorded",   # vehicle accounting arrives with chunk 7 (Section K)
-        "remaining_demand": "not_recorded",
+        "metric_counts": "true" if has_truth else "measured (no separate truth recorded)",
+        "completed_vehicles": accounting["arrived"] if accounting and "arrived" in accounting else "not_recorded",
+        "remaining_demand": ({"active": accounting["active"], "not_inserted": accounting["not_inserted"]}
+                             if accounting and "active" in accounting else "not_recorded"),
+        "vehicle_accounting_consistent": accounting.get("consistent") if accounting else None,
+        "scheduled_vehicles": accounting.get("scheduled") if accounting else None,
+    }
+    masked_times = sorted(e["sim_time_s"] for e in events if e["type"] == "masked_demand")
+    stretches = sum(1 for i, t in enumerate(masked_times) if i == 0 or t != masked_times[i - 1] + 1)
+    errors = [abs(e["payload"]["counts_by_lane"][lane] - e["payload"]["true_counts_by_lane"][lane])
+              for e in samples if has_truth for lane in e["payload"]["counts_by_lane"]]
+    robustness = {
+        "fault_label": (trace.manifest.get("measurement") or {}).get("label", "clean"),
+        "measurement": trace.manifest.get("measurement"),
+        "phantom_demand_events": sum(1 for e in events if e["type"] == "phantom_demand"),
+        "masked_demand_seconds": len(masked_times),
+        "masked_demand_stretches": stretches,
+        "mean_abs_lane_count_error": (sum(errors) / len(errors)) if errors else None,
     }
 
     decisions = [e for e in events if e["type"] == "decision"]
@@ -152,6 +174,7 @@ def summarize(trace: RunTrace) -> dict:
                 "provenance": trace.manifest.get("provenance")},
         "metrics": metrics,
         "behavior": behavior,
+        "robustness": robustness,
         "safety": {"overrides": sum(1 for e in events if e["type"] == "safety_override"),
                    "violations": sum(1 for e in events if e["type"] == "safety_violation")},
         "notable": {
@@ -162,6 +185,8 @@ def summarize(trace: RunTrace) -> dict:
             "exploration": notable([d for d in decisions if d["payload"]["source"] == "q_exploration"]),
             "disagreements_with_queue_rule": notable([d for d in decisions if disagrees(d)]),
             "safety": notable([e for e in events if e["type"] in ("safety_override", "safety_violation")]),
+            "phantom_demand": notable([e for e in events if e["type"] == "phantom_demand"]),
+            "masked_demand": notable([e for e in events if e["type"] == "masked_demand"]),
         },
     }
 
@@ -170,7 +195,9 @@ METRIC_COLUMNS = ("run_id", "controller", "mode", "horizon_s", "completion", "tr
                   "samples", "mean_queued_vehicles", "mean_queued_ns", "mean_queued_we", "peak_queued_vehicles",
                   "queue_exposure_vehicle_seconds", "decisions", "switch_requests_accepted", "forced_switches",
                   "blocked", "fallback_share_of_decisions", "exploration", "learning_updates",
-                  "safety_overrides", "safety_violations", "completed_vehicles", "remaining_demand")
+                  "safety_overrides", "safety_violations", "completed_vehicles", "active_vehicles",
+                  "not_inserted_vehicles", "vehicle_accounting_consistent", "fault_label", "phantom_demand_events",
+                  "masked_demand_seconds", "masked_demand_stretches", "mean_abs_lane_count_error")
 
 
 def write_summary(run_dir: Path | str) -> tuple[Path, Path]:
@@ -190,7 +217,13 @@ def write_summary(run_dir: Path | str) -> tuple[Path, Path]:
         "blocked": b["blocked"], "fallback_share_of_decisions": b["fallback_share_of_decisions"],
         "exploration": b["by_source"].get("q_exploration", 0), "learning_updates": b["learning_updates"],
         "safety_overrides": s["safety"]["overrides"], "safety_violations": s["safety"]["violations"],
-        "completed_vehicles": m["completed_vehicles"], "remaining_demand": m["remaining_demand"],
+        "completed_vehicles": m["completed_vehicles"],
+        "active_vehicles": m["remaining_demand"]["active"] if isinstance(m["remaining_demand"], dict) else "not_recorded",
+        "not_inserted_vehicles": (m["remaining_demand"]["not_inserted"] if isinstance(m["remaining_demand"], dict)
+                                  else "not_recorded"),
+        "vehicle_accounting_consistent": m["vehicle_accounting_consistent"],
+        **{k: s["robustness"][k] for k in ("fault_label", "phantom_demand_events", "masked_demand_seconds",
+                                           "masked_demand_stretches", "mean_abs_lane_count_error")},
     }
     csv_path = run_dir / METRICS_FILE
     with csv_path.open("w", newline="", encoding="utf-8") as fh:
@@ -208,7 +241,8 @@ def render_summary_text(s: dict) -> str:
         f"{r['trace_complete']}; checkpoint: {r['checkpoint_status']}",
         f"Mean queued vehicles {mean}{' (PARTIAL)' if m['partial'] else ''} over {m['samples']} samples; "
         f"peak {m['peak_queued_vehicles']}; exposure {m['queue_exposure_vehicle_seconds']} vehicle-seconds",
-        f"Completed vehicles / remaining demand: {m['completed_vehicles']} / {m['remaining_demand']}",
+        f"Congestion metrics use {m['metric_counts']} counts. Vehicles: {m['completed_vehicles']} completed, "
+        f"remaining {m['remaining_demand']} (accounting consistent: {m['vehicle_accounting_consistent']})",
         f"Scheduled checks {b['scheduled_checks']}: {b['decisions']} decisions, {b['constraint_holds']} timing holds",
         "Decisions by source: " + ", ".join(f"{k} {v}/{b['decisions']}" for k, v in sorted(b["by_source"].items())),
         f"Accepted switches {b['switch_requests_accepted']}, forced switches {b['forced_switches']}, "
@@ -216,6 +250,11 @@ def render_summary_text(s: dict) -> str:
         f"{b['feedback_discarded']}",
         f"Safety: {s['safety']['overrides']} overrides, {s['safety']['violations']} violations",
     ]
+    rb = s["robustness"]
+    if rb["fault_label"] != "clean":
+        lines.append(f"Sensor fault level {rb['fault_label']}: phantom demand {rb['phantom_demand_events']}, masked "
+                     f"demand {rb['masked_demand_seconds']} s in {rb['masked_demand_stretches']} stretches, mean "
+                     f"absolute lane count error {rb['mean_abs_lane_count_error']:.3f}")
     if b["fallback_share_of_decisions"] is not None and b["by_source"].get("queue_fallback"):
         reasons = ", ".join(f"{k.replace('_', ' ')} {v}" for k, v in b["fallback_reasons"].items())
         lines.append(f"Fallback share {b['fallback_share_of_decisions']:.1%} ({reasons}); "
@@ -271,9 +310,10 @@ def _svg(trace: RunTrace, horizon: int) -> str:
         gy = y(peak * frac)
         out.append(f'<line class="grid" x1="{LEFT}" x2="{LEFT + PLOT_W}" y1="{gy:.1f}" y2="{gy:.1f}"/>')
         out.append(f'<text x="{LEFT - 6}" y="{gy + 4:.1f}" text-anchor="end">{round(peak * frac)}</text>')
+    key = "true_counts_by_direction" if obs and all(e["payload"].get("true_counts_by_direction") for e in obs) \
+        else "counts_by_direction"
     for d, color in SERIES.items():
-        pts = " ".join(f"{_x(e['sim_time_s'], horizon):.1f},{y(e['payload']['counts_by_direction'][d]):.1f}"
-                       for e in obs)
+        pts = " ".join(f"{_x(e['sim_time_s'], horizon):.1f},{y(e['payload'][key][d]):.1f}" for e in obs)
         out.append(f'<polyline fill="none" stroke="{color}" stroke-width="1.5" points="{pts}">'
                    f'<title>{escape(name(d))} waiting vehicles</title></polyline>')
 
@@ -299,6 +339,9 @@ def _svg(trace: RunTrace, horizon: int) -> str:
             title = escape(f"{label}: {'keep' if p['retains'] else 'switch to'} {name(p['requested'])} at "
                            f"{e['sim_time_s']}s ({e['event_id']})")
             shape = f'<circle cx="{cx:.1f}" cy="{cy}" r="4" fill="{fill}" stroke="{color}" stroke-width="1.2"/>'
+        elif e["type"] in ("phantom_demand", "masked_demand"):
+            title = escape(f"{e['type'].replace('_', ' ')} (sensing error) at {e['sim_time_s']}s ({e['event_id']})")
+            shape = f'<path d="M{cx:.1f},{cy - 5} l5,5 l-5,5 l-5,-5 z" fill="var(--s-explore)"/>'
         elif e["type"] == "operating_action":
             title = escape(f"operating rule (forced switch) at {e['sim_time_s']}s ({e['event_id']})")
             shape = f'<path d="M{cx:.1f},{cy - 6} l6,10 h-12 z" fill="var(--fg)"/>'
@@ -378,7 +421,8 @@ def build_report(run_dir: Path | str) -> Path:
                 '<span><i class="swatch" style="background:var(--yellow)"></i>yellow</span>'
                 '<span><i class="swatch" style="background:var(--red)"></i>red</span></p>'
                 f'<p class="legend">{legend}<span>&#9679; switch &middot; &#9675; keep &middot; &#9650; operating '
-                f'rule &middot; &#10005; safety monitor</span></p>')
+                f'rule &middot; &#10005; safety monitor &middot; &#9670; sensing-error diagnostic</span></p>'
+                '<p class="meta">Waiting-vehicle lines show the simulator\'s true counts.</p>')
     body.append(_svg(trace, horizon))
 
     body.append("<h2>Learned policy</h2>")

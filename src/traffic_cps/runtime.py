@@ -59,6 +59,7 @@ from traffic_cps.contracts import (
     SubmissionStatus,
 )
 from traffic_cps.controllers import Controller
+from traffic_cps.faults import service_demand_fault
 from traffic_cps.learning import Learner, add_sample, open_interval
 from traffic_cps.safety import SafetyMonitor
 from traffic_cps.scenario import SCENARIO_MANIFEST
@@ -112,6 +113,7 @@ class Runtime:
         session: "TrainingSession | None" = None,
         stop: StopRequest | None = None,
         provenance: dict | None = None,
+        measurement: Any = None,
     ):
         if mode is Mode.TRAIN and learner is None:
             raise ValueError("training mode requires a Learner")
@@ -127,6 +129,9 @@ class Runtime:
         self.session = session          # training checkpoints; None for evaluation and baselines
         self.stop = stop
         self.provenance = provenance    # traffic seed, attempt, learning source, checkpoint identity
+        self.measurement = measurement  # robustness experiment only: faults.SensorNoise
+        self.departed: set[str] = set()
+        self.arrived: set[str] = set()
         self.checkpoint_status: str | None = None
         self.pending = None  # PendingFeedback for the last accepted training choice; never crosses episodes
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -135,7 +140,7 @@ class Runtime:
             "ticks", "observations", "scheduled_checks", "constraint_holds", "eligible_choices", "decisions",
             "accepted_requests", "switches_requested", "blocked_requests", "unexpected_blocks", "operating_actions",
             "signal_changes", "safety_overrides", "safety_violations", "retrieval_retries",
-            "learning_updates", "feedback_discarded",
+            "learning_updates", "feedback_discarded", "phantom_demand", "masked_demand",
         )}
         self.final_valid_time: int | None = None
         self.trace_ok = True
@@ -192,6 +197,7 @@ class Runtime:
                     "counters": self.counters,
                     "learning": self._learning_summary(),
                     "checkpoint_status": self.checkpoint_status,
+                    "vehicle_accounting": self._vehicle_accounting(completion),
                     "finished_at_utc": _utc_now(),
                 })
             except Exception as exc:
@@ -215,6 +221,34 @@ class Runtime:
             checkpoint_status=self.checkpoint_status,
             last_checkpoint_id=self.session.last_checkpoint_id if self.session else None,
         )
+
+    def _vehicle_accounting(self, completion: CompletionStatus) -> dict:
+        """Classify every scheduled vehicle exactly once at the end of the run (Section H)."""
+        try:
+            manifest = json.loads((self.scenario_dir / SCENARIO_MANIFEST).read_text(encoding="utf-8"))
+            scheduled = [v["vehicle_id"] for v in manifest["demand"]["scheduled_vehicles"]]
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            return {"status": "unavailable", "reason": f"scheduled vehicles unreadable: {exc}"}
+        scheduled_set = set(scheduled)
+        arrived = self.arrived
+        active = self.departed - self.arrived
+        not_inserted = scheduled_set - self.departed
+        unexpected = (self.departed | self.arrived) - scheduled_set
+        consistent = not unexpected and arrived <= self.departed \
+            and len(arrived) + len(active) + len(not_inserted) == len(scheduled_set) == len(scheduled)
+        return {
+            "status": "complete" if completion is CompletionStatus.COMPLETED else "partial",
+            "consistent": consistent,
+            "scheduled": len(scheduled),
+            "arrived": len(arrived),
+            "active": len(active),
+            "not_inserted": len(not_inserted),
+            "arrived_ids": sorted(arrived),
+            "active_ids": sorted(active),
+            "not_inserted_ids": sorted(not_inserted),
+            "unexpected_ids": sorted(unexpected),
+            "final_valid_time_s": self.final_valid_time,
+        }
 
     def _say(self, message: str) -> None:
         """Report outside the event log (the log may be the thing that failed)."""
@@ -289,6 +323,7 @@ class Runtime:
             "scenario_manifest_sha256": sha256_file(self.scenario_dir / SCENARIO_MANIFEST),
             "config_sha256": config_digest(self.config),
             "provenance": self.provenance,
+            "measurement": self.measurement.describe() if self.measurement is not None else {"label": "clean"},
             "versions": {
                 "traffic_cps": __version__,
                 "python": sys.version.split()[0],
@@ -311,7 +346,7 @@ class Runtime:
         self.counters["signal_changes"] += 1
         raw, quality = self.sensor.read(self.adapter.read_raw, 0, self.notify)
         self._log_retries(0, quality)
-        obs = self.sensor.observe(raw, self.adapter.timing(), quality)
+        obs = self.sensor.observe(raw, self.adapter.timing(), quality, measure=self.measurement)
         self._log_observation(obs)
         self._control_point(obs)  # t=0: skipped for minimum green, never time-advanced
         self.writer.flush()
@@ -334,7 +369,8 @@ class Runtime:
             if done is not None:
                 self._log_result(done, target_mask=None, log_submission=False)
 
-        obs = self.sensor.observe(raw, self.adapter.timing(), quality)      # step 3
+        obs = self.sensor.observe(raw, self.adapter.timing(), quality,      # step 3
+                                  measure=self.measurement)
         self._log_observation(obs)
         if self.pending is not None:
             self.pending = add_sample(self.pending, obs)
@@ -344,10 +380,22 @@ class Runtime:
 
         if t < H:                                                           # step 5
             timing = self.adapter.timing()
-            if self.adapter.service_limit_reached() and obs.counts_by_direction[timing.current_green.other] > 0:
+            limit = self.config.signal.green_service_limit_s
+            op_id = None
+            forced = self.adapter.service_limit_reached() \
+                and obs.counts_by_direction[timing.current_green.other] > 0
+            if forced:
                 op_id = self.writer.append("operating_action", t, ev.operating_action_payload(
-                    obs, timing, self.config.signal.green_service_limit_s), event_id=f"op-{t}")
+                    obs, timing, limit), event_id=f"op-{t}")
                 self.counters["operating_actions"] += 1
+            if timing.current_green is not None:                            # truth vs measurement (Section H)
+                other = timing.current_green.other
+                fault = service_demand_fault(obs.true_counts_by_direction[other], obs.counts_by_direction[other],
+                                             timing.elapsed_green_s, limit, forced)
+                if fault is not None:
+                    self.writer.append(fault, t, ev.demand_fault_payload(fault, obs, timing, limit, op_id))
+                    self.counters[fault] += 1
+            if forced:
                 target = timing.current_green.other
                 result = self.adapter.request(target, Origin(OriginKind.OPERATING_ACTION, op_id), obs)
                 self._log_result(result, self.adapter.signal_map.mask(SignalPhase.green(target)))
@@ -445,6 +493,8 @@ class Runtime:
     # ------------------------------------------------------------------
 
     def _log_observation(self, obs: Observation) -> None:
+        self.departed.update(obs.departed_ids)
+        self.arrived.update(obs.arrived_ids)
         self.writer.append("observation", obs.time, ev.observation_payload(obs), event_id=obs.observation_id)
         self.counters["observations"] += 1
         self.final_valid_time = obs.time

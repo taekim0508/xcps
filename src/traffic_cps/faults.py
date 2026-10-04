@@ -1,4 +1,4 @@
-"""Fault injection for tests and, later, evaluation-only sensor noise (chunk 7).
+"""Fault injection for tests, and evaluation-only sensor noise for the robustness experiment.
 
 `FaultyConnection` wraps a real TraCI connection: SUMO still runs for real and
 only the calls a test arms misbehave. Nothing here is used by normal runs.
@@ -6,8 +6,10 @@ only the calls a test arms misbehave. Nothing here is used by normal runs.
 
 from __future__ import annotations
 
+import math
+import random
 from collections import Counter
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 
 from traffic_cps.contracts import SafetyOverride, SafetyVerdict
 
@@ -121,3 +123,77 @@ def veto_write_from(monitor: Any, origin_id: str, invariant: str = "S2") -> None
         return real(mask, time, origin)
 
     monitor.check_proposed = check_proposed
+
+
+# ----------------------------------------------------------------------
+# Evaluation-only sensor noise (build contract Section H)
+# ----------------------------------------------------------------------
+
+class SensorNoise:
+    """Valid-looking but wrong lane counts for the labeled robustness experiment.
+
+    Applied once to each successful primary reading (never to make a retry succeed). At t=0 the
+    true count is delivered. Afterwards, for each lane in fixed order, two uniforms are always
+    drawn: the first decides staleness (reuse the previous delivered count), the second becomes
+    integer noise floor(u * (2b + 1)) - b in {-b..b}; otherwise max(0, true + noise) is delivered.
+    Using exactly two random() draws per lane per second makes every level consume an identical
+    draw sequence for the same seed (randint would not guarantee that).
+    """
+
+    def __init__(self, label: str, noise_bound_vehicles: int, stale_probability: float, seed: int,
+                 lane_order: tuple[str, ...]):
+        if isinstance(noise_bound_vehicles, bool) or not isinstance(noise_bound_vehicles, int) \
+                or noise_bound_vehicles < 0:
+            raise ValueError(f"noise bound must be a nonnegative integer, got {noise_bound_vehicles!r}")
+        if not 0.0 <= stale_probability <= 1.0:
+            raise ValueError(f"stale probability must be in [0, 1], got {stale_probability!r}")
+        self.label = label
+        self.bound = noise_bound_vehicles
+        self.stale_probability = stale_probability
+        self.seed = seed
+        self.lane_order = tuple(lane_order)
+        self.rng = random.Random(seed)
+        self.previous: dict[str, int] | None = None
+        self.last_time: int | None = None
+        self.draws = 0
+
+    def describe(self) -> dict:
+        return {"label": self.label, "noise_bound_vehicles": self.bound,
+                "stale_probability": self.stale_probability, "seed": self.seed,
+                "lane_order": list(self.lane_order), "draws_per_lane_per_second": 2}
+
+    def measure(self, t: int, true_counts: Mapping[str, int]) -> dict[str, int]:
+        expected = 0 if self.last_time is None else self.last_time + 1
+        if t != expected:
+            raise ValueError(f"sensor noise expects consecutive seconds: got t={t}, expected t={expected}")
+        self.last_time = t
+        if t == 0:
+            delivered = {lane: true_counts[lane] for lane in self.lane_order}
+        else:
+            delivered = {}
+            for lane in self.lane_order:
+                u_stale, u_noise = self.rng.random(), self.rng.random()
+                self.draws += 2
+                noise = math.floor(u_noise * (2 * self.bound + 1)) - self.bound
+                if u_stale < self.stale_probability:
+                    delivered[lane] = self.previous[lane]
+                else:
+                    delivered[lane] = max(0, true_counts[lane] + noise)
+        self.previous = dict(delivered)
+        return delivered
+
+
+def service_demand_fault(true_competing: int, measured_competing: int, elapsed_green_s: int | None,
+                         service_limit_s: int, forced: bool) -> str | None:
+    """Classify a service-limit outcome caused by sensing error (Module 8).
+
+    phantom_demand: a forced switch happened while the true competing count was zero.
+    masked_demand: at or beyond the limit the true competing count was positive but the measured
+    count was zero, so no switch was forced. Both are evaluation diagnostics, not safety violations.
+    """
+    if forced:
+        return "phantom_demand" if true_competing == 0 and measured_competing > 0 else None
+    if elapsed_green_s is not None and elapsed_green_s >= service_limit_s \
+            and true_competing > 0 and measured_competing == 0:
+        return "masked_demand"
+    return None

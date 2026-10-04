@@ -111,3 +111,25 @@ def test_sectionJ_fixed_retain_explained_as_fixed_schedule(tmp_path):
     assert ("The fixed-time schedule kept N/S green because it had been green for 20s, "
             "below its 30s fixed green target.") in e.text
     assert "No signal change was needed" in e.text
+
+
+def _demand_fault_run(tmp_path, kind, true_c, measured_c, elapsed):
+    b = RunBuilder(tmp_path)
+    b.w.append(kind, 64, {"kind": kind, "observation_id": "obs-64", "green": "NS", "competing": "WE",
+                          "elapsed_green_s": elapsed, "green_service_limit_s": 60,
+                          "measured_competing_count": measured_c, "true_competing_count": true_c,
+                          "fault_label": "high", "operating_event_id": "op-64" if kind == "phantom_demand" else None},
+               event_id=f"{kind}-64")
+    return b.close()
+
+
+def test_module8_phantom_demand_explained_with_seen_versus_true(tmp_path):
+    x = explain(_demand_fault_run(tmp_path, "phantom_demand", 0, 1, 60), "phantom_demand-64")
+    assert ("forced a switch to W/E because the sensor reported 1 waiting on W/E; the simulator's true count "
+            "was 0") in x.text
+    assert "not a safety violation" in x.text and "not applicable" in x.contrast.lower()
+
+
+def test_module8_masked_demand_explained_with_seen_versus_true(tmp_path):
+    x = explain(_demand_fault_run(tmp_path, "masked_demand", 3, 0, 64), "masked_demand-64")
+    assert "3 vehicles were truly waiting on W/E, but the sensor reported 0, so no switch was forced" in x.text

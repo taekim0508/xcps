@@ -113,8 +113,13 @@ class TrafficSensor:
         timing: SignalTiming,
         quality: MeasurementQuality,
         observation_id: str | None = None,
+        measure=None,
     ) -> Observation:
-        """Build one observation; counts, scores, and colors share one timestamp."""
+        """Build one observation; counts, scores, and colors share one timestamp.
+
+        `measure` (robustness experiment only) maps the true lane counts to the delivered ones,
+        once per primary observation; scores are recomputed from what was delivered.
+        """
         try:
             self._validate(raw, raw.time)
         except RetrievalError as exc:
@@ -122,7 +127,8 @@ class TrafficSensor:
         if timing.time != raw.time:
             raise SensorFailure(f"signal timing at t={timing.time} does not match snapshot t={raw.time}")
 
-        counts = {lane: raw.halting_by_lane[lane] for lane in self.lane_order}
+        true_counts = {lane: raw.halting_by_lane[lane] for lane in self.lane_order}
+        counts = dict(true_counts) if measure is None else measure.measure(raw.time, true_counts)
         lane_scores = {lane: min(1.0, counts[lane] / self.capacity[lane]) for lane in self.lane_order}
         return Observation(
             observation_id=observation_id or f"obs-{raw.time}",
@@ -140,4 +146,9 @@ class TrafficSensor:
             transition_start_s=timing.transition_start_s,
             raw_signal=timing.mask,
             measurement=quality,
+            true_counts_by_lane=true_counts,
+            true_counts_by_direction={d: sum(true_counts[lane] for lane in self.lanes[d]) for d in Direction},
+            fault_label="clean" if measure is None else measure.label,
+            departed_ids=tuple(raw.departed_ids),
+            arrived_ids=tuple(raw.arrived_ids),
         )

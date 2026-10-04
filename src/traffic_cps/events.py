@@ -185,6 +185,29 @@ def observation_payload(o: Observation) -> dict:
         "transition_start_s": o.transition_start_s,
         "raw_signal": o.raw_signal,
         "measurement": o.measurement,
+        "true_counts_by_lane": o.true_counts_by_lane,
+        "true_counts_by_direction": o.true_counts_by_direction,
+        "fault_label": o.fault_label,
+        "departed_ids": o.departed_ids,
+        "arrived_ids": o.arrived_ids,
+    }
+
+
+def demand_fault_payload(kind: str, o: Observation, timing: SignalTiming, limit_s: int,
+                         operating_event_id: str | None) -> dict:
+    green = timing.current_green
+    other = green.other
+    return {
+        "kind": kind,
+        "observation_id": o.observation_id,
+        "green": green,
+        "competing": other,
+        "elapsed_green_s": timing.elapsed_green_s,
+        "green_service_limit_s": limit_s,
+        "measured_competing_count": o.counts_by_direction[other],
+        "true_competing_count": o.true_counts_by_direction[other],
+        "fault_label": o.fault_label,
+        "operating_event_id": operating_event_id,
     }
 
 

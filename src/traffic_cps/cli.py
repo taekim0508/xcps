@@ -346,6 +346,63 @@ def cmd_explain(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def cmd_tune_fixed(args: argparse.Namespace) -> int:
+    from traffic_cps.experiments import ExperimentError, tune_fixed
+
+    try:
+        config = load_config(args.config)
+    except ConfigError as exc:
+        print(f"config: FAIL {exc}", file=sys.stderr)
+        return EXIT_INVALID
+    try:
+        record = tune_fixed(config, args.output, horizon_s=args.horizon, notify=_notify)
+    except (ExperimentError, FileExistsError, ValueError) as exc:
+        print(f"tune-fixed: FAIL {exc}", file=sys.stderr)
+        return EXIT_INVALID if not isinstance(exc, ExperimentError) else EXIT_FAILURE
+    for c, row in record["candidates"].items():
+        mean = "incomplete" if row["mean"] is None else f"{row['mean']:.3f}"
+        print(f"fixed target {c:>2}s: mean queued vehicles {mean} over development seeds "
+              f"{record['development_seeds']}{'' if row['eligible'] else ' (not eligible: incomplete runs)'}")
+    print(f"chosen target: {record['chosen_target_s']}s (grid search on the project's metric, not Webster)")
+    print(f"written: {Path(args.output) / 'fixed_tuning.json'}")
+    incomplete = [r for r in record["runs"] if not r["complete"]]
+    return EXIT_OK if not incomplete else EXIT_FAILURE
+
+
+def cmd_evaluate(args: argparse.Namespace) -> int:
+    from traffic_cps.checkpoints import CheckpointError
+    from traffic_cps.experiments import ExperimentError, evaluate_final, evaluate_robustness
+
+    try:
+        config = load_config(args.config)
+    except ConfigError as exc:
+        print(f"config: FAIL {exc}", file=sys.stderr)
+        return EXIT_INVALID
+    if args.suite == "final" and args.fixed_tuning is None:
+        print("evaluate: FAIL --suite final requires --fixed-tuning", file=sys.stderr)
+        return EXIT_INVALID
+    try:
+        if args.suite == "final":
+            record = evaluate_final(config, args.checkpoint, args.fixed_tuning, args.output,
+                                    horizon_s=args.horizon, notify=_notify)
+        else:
+            record = evaluate_robustness(config, args.checkpoint, args.output, horizon_s=args.horizon,
+                                         notify=_notify)
+    except (CheckpointError, ExperimentError, FileExistsError, ValueError) as exc:
+        print(f"evaluate: FAIL {exc}", file=sys.stderr)
+        return EXIT_INVALID
+    for r in record["runs"]:
+        f = r.get("fidelity") or {}
+        print(f"{r['run_id']}: {'complete' if r['complete'] else 'INCOMPLETE'}; explanations "
+              f"{f.get('explained')} (verified {f.get('verified')}, mismatch {f.get('mismatch')}, "
+              f"unavailable {f.get('unavailable')})")
+    for r in record["incomplete_runs"]:
+        print(f"incomplete (excluded from aggregates): {r['run_id']}: {r['failure']}", file=sys.stderr)
+    print(f"written: {Path(args.output) / 'experiment.json'} and runs.csv")
+    mismatches = sum((r.get("fidelity") or {}).get("mismatch", 0) for r in record["runs"])
+    return EXIT_OK if not record["incomplete_runs"] and not mismatches else EXIT_FAILURE
+
+
 def cmd_summarize(args: argparse.Namespace) -> int:
     from traffic_cps.explain import ExplainError, load_trace
     from traffic_cps.report import render_summary_text, summarize, write_summary
@@ -432,6 +489,22 @@ def build_parser() -> argparse.ArgumentParser:
     exp.add_argument("--run", type=Path, required=True)
     exp.add_argument("--decision", required=True, help="event ID")
     exp.set_defaults(func=cmd_explain)
+
+    tune = sub.add_parser("tune-fixed", help="grid-search the fixed-time target on development seeds")
+    tune.add_argument("--config", type=Path, required=True)
+    tune.add_argument("--suite", choices=["development"], required=True)
+    tune.add_argument("--horizon", type=int, help="override the configured horizon (smoke only)")
+    tune.add_argument("--output", type=Path, required=True)
+    tune.set_defaults(func=cmd_tune_fixed)
+
+    evl = sub.add_parser("evaluate", help="final comparison or sensing robustness suite")
+    evl.add_argument("--config", type=Path, required=True)
+    evl.add_argument("--checkpoint", type=Path, required=True)
+    evl.add_argument("--fixed-tuning", type=Path, help="fixed_tuning.json (required for --suite final)")
+    evl.add_argument("--suite", choices=["final", "robustness"], required=True)
+    evl.add_argument("--horizon", type=int, help="override the configured horizon (smoke only)")
+    evl.add_argument("--output", type=Path, required=True)
+    evl.set_defaults(func=cmd_evaluate)
 
     summ = sub.add_parser("summarize", help="print the episode summary; write summary.json and metrics.csv")
     summ.add_argument("--run", type=Path, required=True)
