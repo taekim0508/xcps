@@ -61,6 +61,22 @@ class RunBuilder:
         origin = Origin(OriginKind.TRANSITION_COMPLETION, origin_id)
         self.w.append("signal_change", t, ev.signal_change_payload(signal(f"sig-{t}", t, "yyrr", "rrGG", origin, target)))
 
+    # Q-learning helpers ---------------------------------------------------
+
+    def policy_start(self, learner):
+        ev.write_json_exclusive(self.dir / ev.POLICY_START, learner.snapshot())
+
+    def q_decide(self, o, decision_id, learner, mode):
+        from traffic_cps.controllers.q_learning import QLearningController
+
+        d = QLearningController(learner).select(context(o, mode), decision_id)
+        self.w.append("decision", o.time, ev.decision_payload(d), event_id=d.decision_id)
+        return d
+
+    def learn(self, update):
+        self.w.append("learning_update", update.end_time, ev.learning_update_payload(update),
+                      event_id=f"upd-{update.policy_revision}")
+
     def raw(self, line: str):
         self.w.close()
         with (self.dir / ev.EVENTS_FILE).open("a") as fh:

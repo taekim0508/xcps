@@ -192,6 +192,20 @@ def _interruptible(stop):
         signal.signal(signal.SIGINT, previous)
 
 
+def _write_outputs(run_dir) -> bool:
+    """report.html, summary.json, metrics.csv for a finished run; failures reported, not hidden."""
+    from traffic_cps.report import build_report, write_summary
+
+    try:
+        print(f"report: {build_report(run_dir)}")
+        summary, metrics = write_summary(run_dir)
+        print(f"summary: {summary} ; metrics: {metrics}")
+        return True
+    except Exception as exc:
+        print(f"report/summary: FAIL {type(exc).__name__}: {exc}", file=sys.stderr)
+        return False
+
+
 def _notify(message: str) -> None:
     print(f"warning: {message}", file=sys.stderr)
 
@@ -215,7 +229,6 @@ def _load_frozen_learner(config: Config, checkpoint: Path, scenario: Path, horiz
 def cmd_run(args: argparse.Namespace) -> int:
     from traffic_cps.checkpoints import CheckpointError
     from traffic_cps.contracts import Mode
-    from traffic_cps.report import build_report
     from traffic_cps.runtime import Runtime, StopRequest
 
     try:
@@ -254,19 +267,13 @@ def cmd_run(args: argparse.Namespace) -> int:
     print(f"run directory: {result.run_dir}")
     if result.failure:
         print(f"failure: {result.failure}", file=sys.stderr)
-    report_ok = True
-    try:
-        print(f"report: {build_report(result.run_dir)}")
-    except Exception as exc:
-        report_ok = False
-        print(f"report: FAIL {type(exc).__name__}: {exc}", file=sys.stderr)
+    report_ok = _write_outputs(result.run_dir)
     ok = result.completion is CompletionStatus.COMPLETED and result.persistence_ok and report_ok
     return EXIT_OK if ok else EXIT_FAILURE
 
 
 def cmd_train(args: argparse.Namespace) -> int:
     from traffic_cps.checkpoints import CheckpointError
-    from traffic_cps.report import build_report
     from traffic_cps.runtime import StopRequest, train
 
     try:
@@ -293,11 +300,7 @@ def cmd_train(args: argparse.Namespace) -> int:
               f"{result.persistence_ok}; checkpoint: {result.checkpoint_status} ({result.last_checkpoint_id})")
         if result.failure:
             print(f"failure: {result.failure}", file=sys.stderr)
-        try:
-            build_report(result.run_dir)
-        except Exception as exc:
-            reports_ok = False
-            print(f"report: FAIL {type(exc).__name__}: {exc}", file=sys.stderr)
+        reports_ok = _write_outputs(result.run_dir) and reports_ok
 
     stop = StopRequest()
     try:
@@ -323,6 +326,8 @@ def cmd_train(args: argparse.Namespace) -> int:
     for d in outcome.development:
         print(f"development evaluation episode {d['episode']} seed {d['seed']}: "
               f"{'completed' if d['ok'] else 'FAILED'} ({d['run_id']})")
+        if d["run_dir"]:
+            reports_ok = _write_outputs(d["run_dir"]) and reports_ok
     if outcome.stopped:
         print(f"stopped: {outcome.stopped}", file=sys.stderr)
     if outcome.persistence_failure:
@@ -338,6 +343,20 @@ def cmd_explain(args: argparse.Namespace) -> int:
     except ExplainError as exc:
         print(f"explain: FAIL {exc}", file=sys.stderr)
         return EXIT_INVALID
+    return EXIT_OK
+
+
+def cmd_summarize(args: argparse.Namespace) -> int:
+    from traffic_cps.explain import ExplainError, load_trace
+    from traffic_cps.report import render_summary_text, summarize, write_summary
+
+    try:
+        print(render_summary_text(summarize(load_trace(args.run))))
+        summary, metrics = write_summary(args.run)
+    except ExplainError as exc:
+        print(f"summarize: FAIL {exc}", file=sys.stderr)
+        return EXIT_INVALID
+    print(f"summary: {summary} ; metrics: {metrics}")
     return EXIT_OK
 
 
@@ -413,6 +432,10 @@ def build_parser() -> argparse.ArgumentParser:
     exp.add_argument("--run", type=Path, required=True)
     exp.add_argument("--decision", required=True, help="event ID")
     exp.set_defaults(func=cmd_explain)
+
+    summ = sub.add_parser("summarize", help="print the episode summary; write summary.json and metrics.csv")
+    summ.add_argument("--run", type=Path, required=True)
+    summ.set_defaults(func=cmd_summarize)
 
     rep = sub.add_parser("report", help="write report.html for a finished run (never launches SUMO)")
     rep.add_argument("--run", type=Path, required=True)

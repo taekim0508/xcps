@@ -744,7 +744,7 @@ def evaluate_milestone(config: Config, milestone: Path, training_dir: Path, hori
 
     records = []
     for index, seed in enumerate(config.experiment.development_seeds):
-        record = {"episode": episode, "seed": seed, "ok": False, "run_id": None, "failure": None}
+        record = {"episode": episode, "seed": seed, "ok": False, "run_id": None, "run_dir": None, "failure": None}
         try:
             scenario = training_dir / "scenarios" / f"dev_seed_{seed:03d}"
             if not (scenario / SCENARIO_MANIFEST).is_file():
@@ -762,6 +762,7 @@ def evaluate_milestone(config: Config, milestone: Path, training_dir: Path, hori
                                       "checkpoint_path": str(milestone), "checkpoint_id": data["checkpoint_id"],
                                       "checkpoint_file_sha256": file_sha256(milestone)}).run()
             record["run_id"] = run.run_id
+            record["run_dir"] = run.run_dir
             record["ok"] = run.completion is CompletionStatus.COMPLETED and run.persistence_ok
             record["failure"] = run.failure
         except Exception as exc:  # reported separately; training state is untouched either way

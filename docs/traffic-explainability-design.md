@@ -558,7 +558,7 @@ NIST's meaningfulness principle depends on the audience, so name one. **Primary 
 
 ### Terminology for readers
 
-- Present Q-values as **expected future congestion cost** (the negated Q-value, lower is better), in units of discounted queue-score-seconds at the fixed one-second sampling resolution. Raw negative Q-values remain in the supporting evidence.
+- Present Q-values as **estimated discounted future congestion cost** (the negated Q-value, lower is better), in units of discounted queue-score-seconds at the fixed one-second sampling resolution. Raw negative Q-values remain in the supporting evidence.
 - Use **queue score** only for the sensor's normalized measurement. Do not call Q-values "scores" or "learned scores".
 - Retain decisions are explained as decisions ("Kept N/S green because..."), not omitted. They will be the majority of decisions.
 
@@ -581,9 +581,9 @@ Vehicle counts and readable wording aim at meaningfulness; branch-specific reaso
 | Recorded source | Illustrative wording |
 |---|---|
 | Queue-based selection | “Requested N/S because its queue score was higher: 0.8 versus 0.6.” |
-| Q-learning exploitation | “Requested N/S because its expected future congestion cost was lower: 15 versus 18.” Raw Q-values (-15, -18) in evidence. |
+| Q-learning exploitation | “Requested N/S because its estimated discounted future congestion cost was lower: 15 versus 18.” Raw Q-values (-15, -18) in evidence. |
 | Queue-based retain | “Kept N/S green because its queue score was higher: 1.1 versus 0.4.” |
-| Q-learning retain | “Kept N/S green because keeping it had a lower expected future congestion cost: 12 versus 16.” |
+| Q-learning retain | “Kept N/S green because keeping it had a lower estimated discounted future congestion cost: 12 versus 16.” |
 | Exploration | “Randomly selected N/S to gather training experience.” |
 | Unseen-state fallback | “No training experience was recorded for this state, so the queue-based rule selected N/S.” Include the recorded queue comparison or tie reason. |
 | Incomplete-action-coverage fallback | “Not all available actions have completed training experience in this state, so the queue-based rule selected N/S.” Include the recorded queue comparison or tie reason. |
@@ -591,7 +591,7 @@ Vehicle counts and readable wording aim at meaningfulness; branch-specific reaso
 | Minimum-green hold | “Kept W/E green because its minimum green duration had not elapsed.” This describes a constraint, not a new policy choice. |
 | Forced switch | “Switched to N/S because W/E reached its service limit and vehicles were waiting on N/S.” Use requested/transitioning wording until execution is observed. |
 
-Illustrative linked account: “At 10s, N/S had 8 waiting vehicles and W/E had 6. The controller requested N/S green because its expected future congestion cost was lower: 15 versus 18. W/E entered yellow at 10s, and N/S became green at 12s.” Only include the final execution statement once its confirming event exists; do not claim to know it at 10s. These numbers are examples, not experiment results.
+Illustrative linked account: “At 10s, N/S had 8 waiting vehicles and W/E had 6. The controller requested N/S green because its estimated discounted future congestion cost was lower: 15 versus 18. W/E entered yellow at 10s, and N/S became green at 12s.” Only include the final execution statement once its confirming event exists; do not claim to know it at 10s. These numbers are examples, not experiment results.
 
 If exploration selected N/S, never explain it as a queue-driven or greedy choice just because N/S also had more vehicles or a higher Q-value. If an operating rule forced the outcome, do not describe it as a learned preference. If evidence is missing, show “explanation unavailable” for the affected part and identify the missing record or field; preserve supported parts of the account. Missing log evidence does not by itself prove a sensor reading or physical execution failed.
 
@@ -632,7 +632,7 @@ This static report does not change the out-of-scope status of a live dashboard.
 - An exploration event is still explained as exploration when it happens to choose the highest-valued action.
 - Incomplete evidence produces an explicit limitation rather than invented values or a guessed reason.
 - Decision-time evidence remains unchanged when later learning updates arrive, and evaluation produces no fictitious updates.
-- Q-values are presented to readers as expected future congestion cost with raw values in evidence; no template calls them scores.
+- Q-values are presented to readers as estimated discounted future congestion cost with raw values in evidence; no template calls them scores.
 - Retain decisions produce explanations with the same fidelity checks as switches.
 - The global policy view matches the checkpoint's greedy actions, coverage, and fallback markers cell by cell.
 - Each counterfactual, when recomputed from the decision-time table, actually yields the stated alternative action, and no closer differing state exists.
@@ -1036,3 +1036,6 @@ Resolutions agreed during implementation. They clarify gaps in this document wit
 - **Development evaluation failures (2026-10-03).** A failed milestone development evaluation is reported separately and does not stop training, since it cannot change training state; `train` then exits 1 so the failure is visible.
 - **Version compatibility (2026-10-03).** SUMO, TraCI, and sumolib versions must match exactly. Python must match major.minor (3.11); patch releases do not block resume.
 - **Attempt index on resume (2026-10-03).** No new rule: Section B already specifies it (next index greater than the checkpoint allocation and every allocated run manifest; missing or corrupt manifests stop resume with a recovery error). An earlier implementation counted run folders instead and was corrected to read the manifests.
+- **Q-value wording (2026-10-03).** Module 7 said "expected future congestion cost" and Section G said "estimated discounted future congestion cost". Resolved to Section G's wording everywhere (Module 7 and the interview Q&A updated): "estimated" avoids implying a guaranteed expectation.
+- **Vehicle accounting in summaries (2026-10-03).** Until vehicle accounting is implemented (implementation step 7), `summary.json` and `metrics.csv` report completed vehicles and remaining demand explicitly as not recorded rather than omitting or estimating them.
+- **Per-run metrics file and fixed-time contrast (2026-10-03).** A run's `metrics.csv` is one header row plus one row of that run's Module 8 metrics, so experiment aggregates can stack runs. Fixed-time decisions state their exact contrastive rule (the elapsed green at which the schedule would switch); the doc specified counterfactuals only for the queue rule and Q-learning.

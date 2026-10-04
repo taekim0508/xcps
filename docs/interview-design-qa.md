@@ -283,7 +283,7 @@ This extends the earlier next-observation reward description: the congestion for
 
 **Explanation:** “At State A, N/S is green and the controller observes the queues. It requests W/E green, normally because that action has a higher Q-value, or because it is exploring. The system remembers State A and that accepted request. N/S passes through yellow while W/E remains red, followed by any configured clearance interval. The system continues collecting congestion feedback. At the next scheduled control point where a fresh choice is allowed, it uses that feedback to update the value for requesting W/E in State A before making the next decision.”
 
-The request is issued before the transition; it is not issued retrospectively when learning occurs. What changes afterward is `Q(State A, request W/E)`, not the historical observation or the earlier decision. Higher Q-values are preferred: for example, -2 is higher than -5. Explanations show readers the negated value as expected future congestion cost: 2 versus 5, lower is better. A transition can span multiple simulation steps rather than exactly one yellow step.
+The request is issued before the transition; it is not issued retrospectively when learning occurs. What changes afterward is `Q(State A, request W/E)`, not the historical observation or the earlier decision. Higher Q-values are preferred: for example, -2 is higher than -5. Explanations show readers the negated value as estimated discounted future congestion cost: 2 versus 5, lower is better. A transition can span multiple simulation steps rather than exactly one yellow step.
 
 The update refines the estimate used when State A is encountered again. One-second sampling, reward accumulation, the normal update boundary, and the discount time unit are agreed. Forced-switch and planned-cutoff rules are recorded below; natural early-terminal episodes are outside scope. Evaluation records the transition and outcome without updating Q-values.
 
@@ -515,7 +515,7 @@ A higher Q-value explains why the selection rule preferred an action; it does no
 
 - **Reader:** a traffic or controls engineer inspecting and debugging the controller. NIST's meaningfulness principle depends on audience, so the templates are written for that person.
 - **Interpretable by design:** both policies are directly inspectable (a comparison and a 200-state lookup table), so explanations read the actual decision rule rather than approximating it after the fact (Rudin, 2019). This is the central explainability claim, and it holds only while the policy stays tabular.
-- **Terminology:** Q-values are presented as expected future congestion cost (negated, lower is better), with raw values in evidence. "Score" means only the sensor's queue score. Retain decisions get explanations too, since they're most of the decisions.
+- **Terminology:** Q-values are presented as estimated discounted future congestion cost (negated, lower is better), with raw values in evidence. "Score" means only the sensor's queue score. Retain decisions get explanations too, since they're most of the decisions.
 
 **Decision status:** Explanation components, principle mapping, template-based reasons, execution distinctions, and limitation reporting approved September 30, 2026; implementation and evaluation pending.
 

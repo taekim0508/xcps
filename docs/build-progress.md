@@ -2,7 +2,7 @@
 
 Tracks the 8 development chunks and the current position. Chunks follow the design doc's "Implementation order" (steps 0 to 7) exactly. The design doc remains the specification; this file only records status and decisions.
 
-**Current chunk:** 5 (awaiting review)
+**Current chunk:** 6 (awaiting review)
 
 Status values: `not started`, `in progress`, `awaiting review`, `done`.
 
@@ -15,8 +15,8 @@ Status values: `not started`, `in progress`, `awaiting review`, `done`.
 | 2 | Thin vertical slice | done | `run` -> `explain` -> `report.html` on one short run; peak saturation check recorded |
 | 3 | Fixed-time and full runtime enforcement | done | Full-horizon fixed and queue runs with correct attribution |
 | 4 | Tabular Q-learning | done | Short training learns; frozen evaluation leaves the table unchanged |
-| 5 | Persistence and failure-safe shutdown | awaiting review | Train -> interrupt -> resume -> evaluate cycle works |
-| 6 | Full explanation layer | not started | Fidelity checks pass on all three controllers |
+| 5 | Persistence and failure-safe shutdown | done | Train -> interrupt -> resume -> evaluate cycle works |
+| 6 | Full explanation layer | awaiting review | Fidelity checks pass on all three controllers |
 | 7 | Experiments and results | not started | 7a: code and tests pass. 7b: tuning, training, comparison, robustness runs, honest results summary |
 
 ## Chunk details
@@ -90,7 +90,14 @@ Status values: `not started`, `in progress`, `awaiting review`, `done`.
 
 ### 6. Full explanation layer
 - Files: `explain.py` (full), `report.py` (full), `cli.py` (`summarize`), `summary.json`/`metrics.csv`
+- Approved choices (2026-10-03): Q-values shown as "estimated discounted future congestion cost" (Section G wording; Module 7 aligned); completed vehicles and remaining demand reported as not recorded until chunk 7; `metrics.csv` is one row per run; fixed-time decisions state their switch threshold as the contrast. Built in two internal steps: (a) replay, counterfactuals, fidelity, wording; (b) policy grids, report, summary.
 - Tests: historical policy-revision replay; counterfactual search order; ambiguous-bin labels; saturation tie wording; untrained vs zero; report links match event IDs; no Q grid for baselines
+
+- Result (2026-10-04): 298 unit + 115 integration tests pass in the container. On real runs of fixed-time, queue, Q-learning training, and frozen Q-learning (H=600), every decision's explanation passed the fidelity re-check; counterfactuals were recomputed against an independent brute-force search (correct action, no closer differing state); the frozen run's policy grid matched the checkpoint cell by cell; report links all resolve; summary metrics match an independent calculation.
+- Report checked visually in Chrome on a demo frozen run (`outputs/chunk6_demo`, not committed). Fixed from that review: summary overflowed sideways; the W/E-preferred and fallback cell colors were nearly identical (misleading); grids stacked vertically.
+- Selection rules are now shared pure functions (`queue_choice`, `greedy_choice`) used by both the controllers and the fidelity check.
+- Observation, not a result: in the small frozen tables tried, every fully trained state with one green preferred the same action, so frozen-run counterfactuals were all "none" (correct; brute force agrees). Early training also disagreed with the queue rule often (76 of 81 greedy choices in the demo). Both reflect very short training, not the final experiment.
+- Not in chunk 6: vehicle accounting (summary says "not_recorded"), robustness truth-versus-measurement wording, experiment-level aggregates (chunk 7).
 
 ### 7. Experiments and results
 - Files: `experiments.py`, `faults.py` (noise wrapper), `cli.py` (`tune-fixed`, `evaluate`), vehicle accounting
@@ -129,3 +136,7 @@ Status values: `not started`, `in progress`, `awaiting review`, `done`.
 - 2026-10-03: Chunk 4 approved (committed by Tae, a477c0e). Chunk 5 planning started.
 - 2026-10-03: Chunk 5 plan approved (all recommended options); started.
 - 2026-10-03: Chunk 5 implemented; all tests pass; awaiting review.
+- 2026-10-03: Attempt-index resume corrected to Section B (manifests, recovery error); 367 tests pass.
+- 2026-10-03: Chunk 5 approved (committed by Tae, 0a3e37e). Chunk 6 planning started.
+- 2026-10-03: Chunk 6 plan approved (all recommended options); started.
+- 2026-10-04: Chunk 6 implemented; all tests pass; report reviewed visually; awaiting review.

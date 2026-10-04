@@ -10,7 +10,24 @@ limit with competing demand) is handled here when it applies at a free choice.
 
 from __future__ import annotations
 
-from traffic_cps.contracts import Decision, DecisionContext, DecisionReason, DecisionSource
+from traffic_cps.contracts import Decision, DecisionContext, DecisionReason, DecisionSource, Direction
+
+
+def queue_choice(scores, counts, green: Direction, elapsed_s: float, service_limit_s: float, tol: float,
+                 cap: float) -> tuple[Direction, DecisionReason, bool, bool]:
+    """The queue rule as a pure function: (requested, reason, tie, both_at_cap).
+
+    Shared by the controller and by the explainer's fidelity check, so both apply one rule.
+    """
+    other = green.other
+    own, competing = scores[green], scores[other]
+    tie = abs(own - competing) <= tol
+    both_at_cap = tie and own >= cap - tol and competing >= cap - tol
+    if elapsed_s >= service_limit_s and counts[other] > 0:
+        return other, DecisionReason.SERVICE_LIMIT_COMPETING_DEMAND, tie, both_at_cap
+    if tie:
+        return green, DecisionReason.EQUAL_QUEUE_SCORES, tie, both_at_cap
+    return (green if own > competing else other), DecisionReason.HIGHER_QUEUE_SCORE, tie, both_at_cap
 
 
 class QueueController:
@@ -21,21 +38,9 @@ class QueueController:
         green = o.current_green
         if green is None or o.elapsed_green_s is None or o.elapsed_green_s < context.minimum_green_s:
             raise ValueError(f"queue controller asked to decide at t={o.time} without a free choice")
-
-        other = green.other
-        own, competing = o.scores[green], o.scores[other]
-        tol = context.tie_abs_tolerance
-        tie = abs(own - competing) <= tol
-        cap = context.score_cap
-        both_at_cap = tie and own >= cap - tol and competing >= cap - tol
-
-        if o.elapsed_green_s >= context.green_service_limit_s and o.counts_by_direction[other] > 0:
-            requested, reason = other, DecisionReason.SERVICE_LIMIT_COMPETING_DEMAND
-        elif tie:
-            requested, reason = green, DecisionReason.EQUAL_QUEUE_SCORES
-        else:
-            requested = green if own > competing else other
-            reason = DecisionReason.HIGHER_QUEUE_SCORE
+        requested, reason, tie, both_at_cap = queue_choice(
+            o.scores, o.counts_by_direction, green, o.elapsed_green_s, context.green_service_limit_s,
+            context.tie_abs_tolerance, context.score_cap)
 
         return Decision(
             decision_id=decision_id,

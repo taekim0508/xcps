@@ -37,3 +37,8 @@ def test_contract_G_report_shows_request_and_actual_execution(tmp_path):
     assert "W/E became green at 12s" in html
     assert "<svg" in html
     assert "Q-table" not in html  # baselines show no fake Q-table grid
+
+
+def test_contract_G_baseline_report_has_no_policy_grid(tmp_path):
+    html = build_report(switch_run(tmp_path)).read_text()
+    assert '<table class="q"' not in html and "No learned policy to show" in html

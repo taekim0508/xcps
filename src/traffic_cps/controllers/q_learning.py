@@ -25,11 +25,21 @@ from traffic_cps.contracts import (
     DecisionContext,
     DecisionReason,
     DecisionSource,
+    Direction,
     FallbackReason,
     Mode,
 )
 from traffic_cps.controllers.queue import QueueController
 from traffic_cps.learning import Learner
+
+
+def greedy_choice(values, green: Direction, tol: float) -> tuple[Direction, DecisionReason, bool]:
+    """Highest value wins; the current green wins an absolute-tolerance tie. Shared with the explainer."""
+    other = green.other
+    tie = abs(values[green] - values[other]) <= tol
+    if tie:
+        return green, DecisionReason.EQUAL_Q_VALUES, True
+    return (green if values[green] > values[other] else other), DecisionReason.HIGHER_Q_VALUE, False
 
 
 class QLearningController:
@@ -69,18 +79,12 @@ class QLearningController:
         if training:
             epsilon = lr.schedule.epsilon
             draw = lr.rng.random()
-        tol = context.tie_abs_tolerance
-        other = green.other
-        tie = abs(values[green] - values[other]) <= tol
-
+        greedy, greedy_reason, tie = greedy_choice(values, green, context.tie_abs_tolerance)
         if training and draw < epsilon:
             requested = lr.rng.choice(allowed)
             source, reason = DecisionSource.Q_EXPLORATION, DecisionReason.EXPLORATION
-        elif tie:
-            requested, source, reason = green, DecisionSource.Q_GREEDY, DecisionReason.EQUAL_Q_VALUES
         else:
-            requested = green if values[green] > values[other] else other
-            source, reason = DecisionSource.Q_GREEDY, DecisionReason.HIGHER_Q_VALUE
+            requested, source, reason = greedy, DecisionSource.Q_GREEDY, greedy_reason
 
         return Decision(
             decision_id=decision_id,
