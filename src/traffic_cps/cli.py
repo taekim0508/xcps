@@ -171,7 +171,7 @@ def _make_controller(name: str, config: Config):
     from traffic_cps.controllers.fixed import FixedTimeController
     from traffic_cps.controllers.queue import QueueController
 
-    if name == "fixed":  # pre-tuning target from the config; tuned values arrive in chunk 7
+    if name == "fixed":  # config target; the final suite uses the tuned value from fixed_tuning.json
         return FixedTimeController(config.signal.fixed_green_target_s)
     return {"queue": QueueController}[name]()
 

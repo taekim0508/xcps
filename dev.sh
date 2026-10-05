@@ -5,7 +5,7 @@
 #   ./dev.sh python -m pytest tests/unit
 set -euo pipefail
 
-IMAGE=traffic-cps-dev
+IMAGE=traffic-cps-dev:latest
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 if [[ "${1:-}" == "build" ]]; then

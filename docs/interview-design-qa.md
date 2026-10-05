@@ -21,7 +21,7 @@ Retries allow a temporary retrieval problem to recover. Ending the run after per
 
 Previously collected valid measurements remain usable, but any summary must identify that it covers only a partial run. Missing values are not zeros. This policy concerns required sensor retrieval; failures to save valid measurements follow Module 6's separate write-failure policy.
 
-**Decision status:** Agreed on September 28, 2026. This replaces the earlier proposal to continue the simulation with a fallback signal action after persistent retrieval failure.
+**Decision status:** Agreed. This replaces the earlier proposal to continue the simulation with a fallback signal action after persistent retrieval failure.
 
 ## What happens when both traffic directions have the same queue score?
 
@@ -62,7 +62,7 @@ Equal queue scores do not mean equal learned action values. Q-learning's approve
 
 Both modes use current sensor observations, obey the same operating constraints, and record decision evidence. Evaluation retains the approved current-green tie rule. Freezing learning does not freeze traffic or signal actions. Evaluation must not modify the saved table; the approved queue-based fallback for unseen states is described below.
 
-**Decision status:** Agreed; implementation pending. Queue and elapsed-time categories, reward, learning rate, discount factor, and the exploration schedule are agreed below. Signal timing defaults were finalized on September 30, 2026. The initial budget is 15 episodes; remaining integration choices are finalized in the main design.
+**Decision status:** Agreed; implementation pending. Queue and elapsed-time categories, reward, learning rate, discount factor, and the exploration schedule are agreed below. Signal timing defaults were finalized. The initial budget is 15 episodes; remaining integration choices are finalized in the main design.
 
 ## Is this a reproduction of the original project?
 
@@ -80,7 +80,7 @@ Limits to state up front: time is simulated and discrete (no wall-clock deadline
 
 **Interview answer:** “The adapter enforces timing, but I don't trust the scheduler to check itself. A separate safety monitor reads raw signal states every second and checks four invariants: at most one direction is ever non-red, a green only follows the opposing yellow and red, no optional switch before minimum green, and a forced service switch starts within a second. It vetoes unsafe commands before submission and stops the run on any observed violation. This is an independent runtime assurance guard, not a claim of a complete, formally verified Simplex architecture. The validated time-zero initialization is the only exception to requiring a prior yellow transition.”
 
-**Decision status:** Module 4A added September 30, 2026. Fault injection tests prove it catches a deliberately broken adapter (green to green without yellow) and a controller that requests switches every second. Normal runs must report zero violations. Overrides are explanation sources, distinct from controller decisions and operating-rule actions.
+**Decision status:** Module 4A added. Fault injection tests prove it catches a deliberately broken adapter (green to green without yellow) and a controller that requests switches every second. Normal runs must report zero violations. Overrides are explanation sources, distinct from controller decisions and operating-rule actions.
 
 ## Does this project control one intersection or a network of intersections?
 
@@ -133,7 +133,7 @@ For example, `(medium, high, NS_green, earlier)` and `(medium, high, NS_green, l
 
 The basic green-state encoding has `5 × 5 × 2 × 4 = 200` possible states. This counts combinations of queue categories, green direction, and elapsed-time category; it does not treat yellow or clearance as additional green phases. Timing bins remain an approximation: different exact times within one bin are grouped together.
 
-**Decision status:** Four categories approved; implementation pending. Timing defaults finalized September 30, 2026: minimum green 5s, yellow 2s, and green-service limit 60s. The midpoint is 32.5s, giving bins [0, 5), [5, 32.5), [32.5, 60), and [60, infinity). The earlier 10-second minimum was only illustrative. Transition and learning integration are finalized in the main design. The categories and thresholds must be recorded with the Q-table so changed state encodings are not silently reused.
+**Decision status:** Four categories approved; implementation pending. Timing defaults finalized: minimum green 5s, yellow 2s, and green-service limit 60s. The midpoint is 32.5s, giving bins [0, 5), [5, 32.5), [32.5, 60), and [60, infinity). The earlier 10-second minimum was only illustrative. Transition and learning integration are finalized in the main design. The categories and thresholds must be recorded with the Q-table so changed state encodings are not silently reused.
 
 ## What happens when evaluation encounters an unseen state?
 
@@ -277,7 +277,7 @@ If these intervals can have different durations, both reward accumulation and fu
 
 This extends the earlier next-observation reward description: the congestion formula stays the same at each sampling point, but samples across an execution interval contribute to its learning target. One-second observations, fixed five-second control points, the normal completion boundary, reward accumulation, forced-switch attribution, and planned experiment-cutoff handling are agreed. The discount time unit is approved as 0.95 per five simulated seconds. Natural early-terminal episodes are outside this fixed-duration version. Binned observations remain an approximation and do not establish a fully Markov state representation.
 
-**Decision status:** Yellow as an enforced transition and its visibility/attribution are agreed. The normal feedback interval and reward accumulation were approved on September 29, 2026; implementation pending. The discount time unit was approved on September 30, 2026. Forced-switch and planned-cutoff rules are recorded below; natural early-terminal episodes are outside scope.
+**Decision status:** Yellow as an enforced transition and its visibility/attribution are agreed. The normal feedback interval and reward accumulation were approved; implementation pending. The discount time unit was approved. Forced-switch and planned-cutoff rules are recorded below; natural early-terminal episodes are outside scope.
 
 ## In plain language, what gets updated after a yellow transition?
 
@@ -301,7 +301,7 @@ The interval lasts ten seconds, so its future multiplier is `d**10 = 0.95**2 = 0
 
 The old estimate becomes less negative because the target is better than the old estimate, even though all observed rewards are negative. The next actual action is selected afterward and may explore; Q-learning's target still uses the highest allowed next-state value. The current reward interval and the next-state estimate cover successive periods, preventing double-counting of the observed congestion.
 
-**Decision status:** Accumulation approved on September 29, 2026. The discount of 0.95 per five simulated seconds was approved on September 30, 2026; implementation pending. Forced actions and episode-end boundaries are outside this normal example.
+**Decision status:** Accumulation approved. The discount of 0.95 per five simulated seconds was approved; implementation pending. Forced actions and episode-end boundaries are outside this normal example.
 
 ## How does learning handle a forced switch?
 
@@ -314,7 +314,7 @@ The old estimate becomes less negative because the target is better than the old
 - The update reflects behavior under the combined controller and operating rules; it is not evidence that the original choice alone caused every subsequent traffic outcome.
 - Preserve the existing failure-stop policy. Planned episode cutoffs follow the agreed rule below.
 
-**Decision status:** Forced-switch handling approved on September 29, 2026; implementation pending. The discount time unit and numeric signal defaults were finalized on September 30, 2026.
+**Decision status:** Forced-switch handling approved; implementation pending. The discount time unit and numeric signal defaults were finalized.
 
 ## What happens to learning when a run reaches its planned end?
 
@@ -324,7 +324,7 @@ At 3,600 seconds, a final update is permitted only when the timing rules would a
 
 The horizon is a time limit on the experiment, not proof that future congestion disappears. Retain the next-state estimate in a valid final update rather than forcing it to zero. A successful run remains complete even if its last learning interval is unfinished; a sensor or execution failure marks the run incomplete. Clear pending feedback before resetting traffic, while retaining the table and exploration progress. Persistence failures must be reported separately.
 
-**Decision status:** Planned experiment-cutoff handling approved on September 29, 2026; implementation pending. True terminal scenarios remain separate from this fixed-duration design.
+**Decision status:** Planned experiment-cutoff handling approved; implementation pending. True terminal scenarios remain separate from this fixed-duration design.
 
 ## Does the Q-table start from scratch for each simulation run?
 
@@ -344,7 +344,7 @@ Each submission retains the originating decision reference, allowing the explana
 
 This replaces the existing actuator's phase-zero default and modulo remapping. Invalid commands are not retried under the sensor retrieval policy. Simulator command failure and uncertain-delivery behavior are recorded below.
 
-**Decision status:** Actuator boundary and invalid-request behavior approved on September 29, 2026; implementation pending.
+**Decision status:** Actuator boundary and invalid-request behavior approved; implementation pending.
 
 ## What happens if a valid phase request is blocked by signal timing?
 
@@ -363,7 +363,7 @@ For example: “W/E green was requested, but N/S minimum green had not elapsed. 
 
 The runtime must preserve the distinction between a blocked request and an action actually carried out when assigning learning feedback. A defensively blocked new request creates no learning interval and does not decay epsilon or increment accepted-choice progress. Keep any previous interval update already completed before selection. Observations with no pending accepted action remain in the trace without being assigned a fictitious learning action; retry with a fresh choice at the next eligible scheduled check. Simulator command failures and uncertain delivery are separate cases, not timing blocks; they follow the stop policy below.
 
-**Decision status:** Timing-block behavior approved on September 29, 2026; implementation pending. The adapter boundary and failure behavior are now consolidated in the main design document. Numeric signal defaults were finalized September 30, 2026; runtime integration details are finalized in the main design.
+**Decision status:** Timing-block behavior approved; implementation pending. The adapter boundary and failure behavior are now consolidated in the main design document. Numeric signal defaults were finalized; runtime integration details are finalized in the main design.
 
 ## What happens if a simulator command fails or its delivery is uncertain?
 
@@ -387,7 +387,7 @@ This differs from a known timing block, which leaves execution state understood 
 
 These guarantees concern a controlled shutdown where persistence succeeds. Abrupt process termination or a failed checkpoint write requires separate persistence handling in the logging/checkpoint module; do not claim unsaved in-memory updates survived. Previously completed learning remains usable, but is not thereby proven accurate or sufficient.
 
-**Decision status:** Command-failure stop policy, clean-shutdown behavior, and retention of valid partial-run learning approved on September 29, 2026; implementation pending.
+**Decision status:** Command-failure stop policy, clean-shutdown behavior, and retention of valid partial-run learning approved; implementation pending.
 
 ## Does a one-second simulation tick mean the controller chooses every second?
 
@@ -402,7 +402,7 @@ Under the agreed one-second observation interval and fixed five-second control i
 
 These counts assume control points at time zero and every five seconds strictly before the episode ends. The final horizon observation completes the run rather than issuing an extra action. Timing restrictions can reduce free decision opportunities below the scheduled count. Repeated visits can update the same Q-table entry, and evaluation performs no learning updates.
 
-**Status:** One-second observation intervals and fixed five-second control points approved on September 29, 2026; implementation pending.
+**Status:** One-second observation intervals and fixed five-second control points approved; implementation pending.
 
 ## Why consider a decision before minimum green has elapsed?
 
@@ -416,7 +416,7 @@ Real minimum-green settings depend on the movement and intersection, including d
 
 The adapter's ability to block an unexpectedly early request remains a defensive check. Routine minimum-green holds should be detected before asking the controller to generate a request that cannot execute. Mandatory timing behavior remains enforced independently of optional policy reconsideration.
 
-**Status:** Fixed scheduling with timing-based skipping approved on September 29, 2026; implementation pending. Signal durations, normal feedback boundaries, and planned-cutoff handling are now finalized; integration details are finalized in the main design.
+**Status:** Fixed scheduling with timing-based skipping approved; implementation pending. Signal durations, normal feedback boundaries, and planned-cutoff handling are now finalized; integration details are finalized in the main design.
 
 ## Is a blocked decision queued until it becomes executable?
 
@@ -443,7 +443,7 @@ At or beyond 60 seconds of actual green, competing queued demand forces service 
 
 The minimum-green setting and five-second controller interval are separate parameters. A green beginning at 12s satisfies minimum green at 17s, but the next optional controller decision occurs at 20s. The elapsed-green bins are [0, 5), [5, 32.5), [32.5, 60), and [60, infinity); exact elapsed time still controls operating rules.
 
-**Decision status:** Simulation timing defaults finalized September 30, 2026; implementation pending. See Module 2A of the main design document.
+**Decision status:** Simulation timing defaults finalized; implementation pending. See Module 2A of the main design document.
 
 ## What are the program, training, a run, and a checkpoint?
 
@@ -459,7 +459,7 @@ The event log and checkpoint serve different purposes. Each run gets a separate 
 
 Only successfully saved progress is recoverable from the checkpoint. Unfinished feedback is cleared before the new episode. Restore the saved controller random-generator state, but do not claim this reproduces vehicle positions or the interrupted traffic trajectory. Verify state bins, action mapping, reward/discount semantics, and other compatibility metadata before using saved values. The approved save cadence and checkpoint recovery rules are recorded below and in Module 6.
 
-**Decision status:** Separate per-run JSONL logs and JSON training checkpoints, with the example structures and roles discussed, approved September 30, 2026; implementation pending.
+**Decision status:** Separate per-run JSONL logs and JSON training checkpoints, with the example structures and roles discussed, approved; implementation pending.
 
 ## When do you save checkpoints, and how do you protect the previous save?
 
@@ -469,7 +469,7 @@ Count updates since the last successful save, not controller checks or newly dis
 
 With successful scheduled saves, fewer than 100 additional updates normally accumulate between saves. This is not a strict 99-update crash-loss guarantee: a crash during the due save can lose 100, and failed saves can increase the gap. Atomic replacement protects file publication; detailed disk durability and failure response still need implementation. An unfinished feedback interval is never converted into a completed update just to save it.
 
-**Decision status:** Checkpoint cadence and temporary-file replacement approved September 30, 2026; implementation pending. The agreed write-failure policy follows below.
+**Decision status:** Checkpoint cadence and temporary-file replacement approved; implementation pending. The agreed write-failure policy follows below.
 
 ## What happens if an event log or checkpoint cannot be saved?
 
@@ -481,7 +481,7 @@ Keep previous valid records and completed learning; exclude unfinished feedback 
 
 Example when an earlier checkpoint is confirmed intact: “Checkpoint saving failed. Simulation stopped at 1,245 seconds. Your previous checkpoint is intact; learning since that checkpoint was not saved.” If failure occurs after reaching the planned horizon, report “simulation completed, saving failed” instead.
 
-**Decision status:** Log/checkpoint write-failure handling approved September 30, 2026; implementation pending. The agreed checkpoint-loading policy follows below.
+**Decision status:** Log/checkpoint write-failure handling approved; implementation pending. The agreed checkpoint-loading policy follows below.
 
 ## How do you handle checkpoint recovery, flushing, and reproducibility?
 
@@ -491,7 +491,7 @@ Example when an earlier checkpoint is confirmed intact: “Checkpoint saving fai
 - **Randomness:** Save and restore the controller's random-generator state alongside learning progress. Record each episode's traffic seed and configuration.
 - **Resume behavior:** Restore saved learning and controller randomness, then start fresh traffic. This is not a paused simulation restore or a promise of identical future trajectories.
 
-**Decision status:** Approved September 30, 2026. Logging/checkpoint module design complete for the agreed scope; implementation and validation pending.
+**Decision status:** Approved. Logging/checkpoint module design complete for the agreed scope; implementation and validation pending.
 
 ## Which explainability principles guide the explanation layer?
 
@@ -517,7 +517,7 @@ A higher Q-value explains why the selection rule preferred an action; it does no
 - **Interpretable by design:** both policies are directly inspectable (a comparison and a 200-state lookup table), so explanations read the actual decision rule rather than approximating it after the fact (Rudin, 2019). This is the central explainability claim, and it holds only while the policy stays tabular.
 - **Terminology:** Q-values are presented as estimated discounted future congestion cost (negated, lower is better), with raw values in evidence. "Score" means only the sensor's queue score. Retain decisions get explanations too, since they're most of the decisions.
 
-**Decision status:** Explanation components, principle mapping, template-based reasons, execution distinctions, and limitation reporting approved September 30, 2026; implementation and evaluation pending.
+**Decision status:** Explanation components, principle mapping, template-based reasons, execution distinctions, and limitation reporting approved; implementation and evaluation pending.
 
 
 ## What training and evaluation setup is planned?
@@ -565,7 +565,7 @@ For an optional pilot, compare raw logs with formatted explanations using counte
 - **Episode scope:** Run to the configured horizon, even if traffic becomes empty. Natural early-terminal learning is outside this version.
 - **Minimal architecture:** Use sensor, controller, actuator, adapter, independent safety monitor, runtime, persistence, explanation formatter (with CLI and static run report), and runner. Omit unused corridor/network supervisor scaffolding.
 
-**Design closeout:** September 30, 2026. These routine defaults and the remaining experiment design were finalized under the user's authorization to complete the document. All modules are specified; implementation, tests, benchmarks, and any human-comprehension evaluation remain future work.
+**Design closeout.** These routine defaults and the remaining experiment design were finalized under the user's authorization to complete the document. All modules are specified; implementation, tests, benchmarks, and any human-comprehension evaluation remain future work.
 
 
 ## Can this be built without the old XCPS repository?

@@ -1,6 +1,6 @@
 """Chunk 5 with real SUMO: checkpoint schedule, resume, interruption, write-failure policy, milestones.
 
-Module 6 acceptance checks, Section F, Section I, and the Section K resolutions of 2026-10-03.
+Module 6 acceptance checks, Section F, Section I, and the Section K resolutions.
 """
 
 import json
